@@ -1,0 +1,49 @@
+<!--
+  ResInk AI (研墨) Brand Logo — Grey Version
+  =============================================
+  用途: 加载进度条底层（灰色未填充状态）
+  配对: overleaf-o.svg (彩色版，填充层)
+
+  设计要素:
+    1. 主体轮廓: 宝石/叶片形 — 锐角尖顶(~16°) + 宽肩(96px) + 凹弧下收至锐尖底部
+    2. 笔尖: 白色墨缝(32px) + 呼吸孔(r=4)，模拟钢笔尖结构 → 映射「研/书写」
+    3. 星火: 主菱形(34×38px) 右偏 + 副菱形(24×26px) 左上，对角分布 → 映射「AI」
+    4. 整体意象: 墨滴 × 钢笔尖 × AI光芒 → 「研墨 ResInk AI」
+
+  SVG 规格:
+    - viewBox: 0 0 136 157 (与原 Overleaf logo 一致)
+    - 灰色填充: #9b9b9b
+    - 内部元素: #fff (白色)
+
+  修改须知:
+    - 必须同时维护两个版本: 本文件(灰色) + overleaf-o.svg(彩色)
+    - 两个文件的 path/形状必须完全一致，仅 fill 颜色不同
+    - 若修改 viewBox 宽高比，需同步更新 loading-screen.scss 中的 padding-top 值
+      公式: padding-top = (height / width) * 100%，当前 = 157/136 ≈ 115.44%
+
+  相关代码位置:
+    - 进度条样式: services/web/frontend/stylesheets/pages/editor/loading-screen.scss
+    - 进度条组件: services/web/frontend/js/shared/components/loading-branded.tsx
+    - 进度逻辑:   services/web/frontend/js/features/ide-react/components/loading.tsx
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 136 157" width="136" height="157">
+  <!-- 主体轮廓: 尖顶 + 宽肩 + 凹弧下收 -->
+  <path d="
+    M 68,152
+    C 64,138 48,92 20,62
+    C 14,42 38,6 68,2
+    C 98,6 122,42 116,62
+    C 88,92 72,138 68,152
+    Z
+  " fill="#9b9b9b"/>
+
+  <!-- 笔尖: 墨缝 + 呼吸孔 -->
+  <line x1="68" y1="152" x2="68" y2="120" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
+  <circle cx="68" cy="116" r="4" fill="#fff"/>
+
+  <!-- AI 星火 - 主 (右偏, 34×38px 菱形) -->
+  <path d="M92,38 L97,52 L109,57 L97,62 L92,76 L87,62 L75,57 L87,52 Z" fill="#fff"/>
+
+  <!-- AI 星火 - 副 (左上, 24×26px 菱形, 半透明) -->
+  <path d="M44,18 L48,27 L56,31 L48,35 L44,44 L40,35 L32,31 L40,27 Z" fill="#fff" opacity="0.45"/>
+</svg>

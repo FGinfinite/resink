@@ -1,0 +1,21 @@
+# docker image build
+.dockerignore
+
+# user defined files
+.env
+deploy/*.env
+deploy/.env
+deploy/generated/
+docker-compose.override.yml
+opencode-research/
+qwen-code-research/
+awesome-ai-research-writing/
+node_modules
+pem/
+continue-research/
+AI-Research-SKILLs/
+
+issues*.md
+
+test-file.zip
+CHANGELOG.md

@@ -1,0 +1,27 @@
+// Duration tokens
+$transition-fast: 120ms;
+$transition-base: 200ms;
+$transition-slow: 300ms;
+
+// Easing tokens
+$ease-standard: cubic-bezier(0.4, 0, 0.2, 1); // Material standard
+$ease-decelerate: cubic-bezier(0, 0, 0.2, 1); // Element enter
+$ease-accelerate: cubic-bezier(0.4, 0, 1, 1); // Element exit
+
+:root {
+  --transition-fast: #{$transition-fast};
+  --transition-base: #{$transition-base};
+  --transition-slow: #{$transition-slow};
+  --ease-standard: #{$ease-standard};
+  --ease-decelerate: #{$ease-decelerate};
+  --ease-accelerate: #{$ease-accelerate};
+}
+
+// prefers-reduced-motion global fallback
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --transition-fast: 0ms;
+    --transition-base: 0ms;
+    --transition-slow: 0ms;
+  }
+}

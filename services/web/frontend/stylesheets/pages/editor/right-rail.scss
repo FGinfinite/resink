@@ -1,0 +1,28 @@
+// ============================================================================
+// Right Rail — AI panel on the right side
+// ============================================================================
+
+.ide-right-rail-content-wrapper {
+  display: flex;
+  height: 100%;
+  flex-direction: row;
+}
+
+.ide-right-rail-content-wrapper > .ide-rail-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.ide-right-rail {
+  height: 100%;
+  padding: var(--spacing-02);
+  background: var(--ide-rail-background);
+  border-left: 1px solid var(--ide-rail-border-colour);
+  width: 40px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-02);
+  padding-top: var(--spacing-02);
+}

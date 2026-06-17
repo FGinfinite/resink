@@ -1,0 +1,89 @@
+/* Tailwind utilities for Streamdown rendering in AI Assistant */
+@tailwind utilities;
+
+/* ================================================================
+ * CSS 变量桥接: Overleaf 色彩系统 → Streamdown 语义变量
+ * 颜色参考: foundations/colors.scss
+ * ================================================================ */
+
+/* 暗色主题 (默认) */
+:root {
+  --sd-background: #0f1419;
+  --sd-foreground: #e8eaed;
+  --sd-muted: #21262d;
+  --sd-muted-foreground: #8b949e;
+  --sd-border: rgba(139, 148, 158, 0.2);
+  --sd-primary: #388bfd;
+}
+
+/* 亮色主题 */
+[data-theme='light'] {
+  --sd-background: #fafbfc;
+  --sd-foreground: #1a1a2e;
+  --sd-muted: #f0f1f3;
+  --sd-muted-foreground: #6b7280;
+  --sd-border: rgba(107, 114, 128, 0.15);
+  --sd-primary: #388bfd;
+}
+
+/* ================================================================
+ * 透明度修饰符修复
+ * Tailwind bg-muted/80 等无法与 CSS 变量配合
+ * 用 color-mix() 提供正确的 alpha 值
+ * ================================================================ */
+
+.ai-streamdown-root [data-streamdown="code-block-header"] {
+  background-color: color-mix(in srgb, var(--sd-muted) 80%, transparent) !important;
+}
+
+.ai-streamdown-root [data-streamdown="table-header"] {
+  background-color: color-mix(in srgb, var(--sd-muted) 80%, transparent) !important;
+}
+
+.ai-streamdown-root [data-streamdown="table-body"] {
+  background-color: color-mix(in srgb, var(--sd-muted) 40%, transparent) !important;
+}
+
+.ai-streamdown-root [data-streamdown="blockquote"] {
+  border-left-color: color-mix(in srgb, var(--sd-muted-foreground) 30%, transparent) !important;
+}
+
+/* ================================================================
+ * 根元素补偿
+ * important: '.ai-streamdown-root' 无法匹配根元素自身的类
+ * space-y-4 和 whitespace-normal 在根 div 上不生效
+ * ================================================================ */
+
+.ai-streamdown-root {
+  white-space: normal;
+}
+
+.ai-streamdown-root > * + * {
+  margin-top: 1rem; /* 等价于 space-y-4 */
+}
+
+/* ================================================================
+ * 行内代码对比度增强
+ * AI 消息气泡背景是 neutral-70，Tailwind 的 bg-muted 映射到
+ * neutral-60，对比度不足。用 rgba 白色半透明提供更好的对比。
+ * ================================================================ */
+
+.ai-message-assistant .ai-streamdown-root [data-streamdown="inline-code"] {
+  background-color: rgba(255, 255, 255, 0.12) !important;
+  color: inherit !important;
+}
+
+[data-theme='light'] .ai-message-assistant .ai-streamdown-root [data-streamdown="inline-code"] {
+  background-color: rgba(0, 0, 0, 0.07) !important;
+  color: inherit !important;
+}
+
+/* ================================================================
+ * 代码块间距修复
+ * Streamdown 的 code-block 内部 <pre> 有浏览器默认 margin
+ * 导致 header 和 body 之间出现不协调的间距
+ * ================================================================ */
+
+.ai-streamdown-root [data-streamdown="code-block-body"] {
+  margin: 0;
+}

@@ -1,0 +1,57 @@
+{
+  "name": "@overleaf/ai-writing-agent",
+  "description": "AI Writing Agent service for Overleaf",
+  "private": true,
+  "main": "app.js",
+  "type": "module",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node app.js",
+    "nodemon": "node --watch app.js",
+    "test:unit": "vitest run --config vitest.config.unit.cjs",
+    "test:unit:watch": "vitest --config vitest.config.unit.cjs",
+    "test:acceptance": "mocha --recursive --timeout 30000 --exit test/acceptance/js",
+    "lint": "eslint --max-warnings 0 --format unix .",
+    "format": "prettier --list-different $PWD/'**/{*.*js,*.ts}'",
+    "format:fix": "prettier --write $PWD/'**/{*.*js,*.ts}'",
+    "lint:fix": "eslint --fix .",
+    "types:check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@overleaf/config-system": "*",
+    "@overleaf/fetch-utils": "*",
+    "@overleaf/logger": "*",
+    "@overleaf/metrics": "*",
+    "@overleaf/mongo-utils": "*",
+    "@overleaf/o-error": "*",
+    "@overleaf/promise-utils": "*",
+    "@overleaf/settings": "*",
+    "body-parser": "1.20.4",
+    "dotenv": "^16.3.1",
+    "express": "4.22.1",
+    "mongodb": "6.12.0",
+    "multer": "^2.0.2",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "chai": "^4.3.6",
+    "chai-as-promised": "^7.1.1",
+    "mocha": "^11.1.0",
+    "nock": "^13.5.0",
+    "request": "^2.88.2",
+    "sinon": "^9.2.4",
+    "sinon-chai": "^3.7.0",
+    "typescript": "^5.0.4",
+    "vitest": "^1.2.0"
+  },
+  "directories": {
+    "test": "test"
+  },
+  "keywords": [
+    "ai",
+    "writing",
+    "agent",
+    "overleaf"
+  ],
+  "license": "AGPL-3.0"
+}

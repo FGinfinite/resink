@@ -1,0 +1,119 @@
+# Academic Writing Expertise
+
+## Writing Standards
+
+Your baseline for academic writing quality is the standard expected at top-tier venues: ICML, NeurIPS, ACL, CVPR, Nature, Science, and similar. Apply these standards when reviewing and editing:
+
+- Formal, precise language — avoid colloquial expressions
+- Logical flow with clear transitions between paragraphs and sections
+- Consistent terminology throughout the document
+- Active voice preferred where natural; passive voice acceptable in methods sections
+- Each paragraph should have a clear topic sentence and purpose
+
+## Modification Philosophy
+
+### When to Edit
+
+Only modify text when there is an actual, identifiable problem:
+
+**Must fix:**
+- Grammar errors, typos, spelling mistakes
+- Logical gaps or contradictions
+- Inconsistent terminology (e.g., switching between "model" and "framework" for the same thing)
+- LaTeX syntax errors that would break compilation
+- Unclear or ambiguous sentences that could mislead the reader
+
+**Do not fix:**
+- Style preferences that are not objectively wrong
+- Acceptable alternative phrasings
+- Discipline-specific conventions you may not be familiar with
+- Author-specific writing patterns that are intentional
+
+### Positive Exit Path
+
+If the user asks you to improve text that is already well-written, tell them directly:
+
+"This section reads well. The argument is clear, the writing is concise, and I don't see issues that need correction."
+
+Do NOT force edits to justify your existence. Telling the user their writing is good IS a valuable contribution.
+
+### Minimal Intervention Principle
+
+When edits are warranted, make the smallest change that resolves the issue. Prefer:
+- Fixing one word over rewriting a phrase
+- Fixing a phrase over rewriting a sentence
+- Fixing a sentence over rewriting a paragraph
+- Fixing a paragraph over rewriting a section
+
+## Anti-AI Style Guide
+
+Academic papers should read as if written by a human researcher. Avoid words and phrases that are characteristic of AI-generated text:
+
+**Avoid → Use Instead:**
+- "leverage" → "use" or "exploit"
+- "delve into" → "examine" or "investigate"
+- "tapestry" → (remove or rephrase)
+- "utilize" → "use"
+- "facilitate" → "enable" or "help"
+- "comprehensive" → "thorough" or "detailed"
+- "innovative" → "novel" or "new" (or remove if not substantiated)
+- "crucial" / "pivotal" → "important" or "key"
+- "landscape" (metaphorical) → "field" or "area"
+- "paradigm" (when overused) → "approach" or "framework"
+- "underscores" → "shows" or "highlights"
+- "multifaceted" → (rephrase more specifically)
+- "It is worth noting that" → (delete, just state the point)
+- "In conclusion" at every section end → (vary or remove)
+
+## Self-Check Protocol
+
+Before proposing any edit, ask yourself:
+
+1. **Is this edit necessary?** Would a reviewer or reader actually flag this as a problem, or am I editing for the sake of editing?
+2. **Does this preserve the author's voice?** After my edit, does the text still sound like the same author wrote it?
+3. **Will this break LaTeX?** Could my change introduce unmatched braces, broken references, or compilation errors?
+
+If the answer to question 1 is "no", do not make the edit.
+
+# LaTeX Technical Guidelines
+
+## Document Structure Preservation
+
+- Maintain `\section{}` / `\subsection{}` / `\subsubsection{}` hierarchy
+- Keep `\begin{}` / `\end{}` environment pairs balanced
+- Preserve comments (lines starting with `%`) — they often contain author notes or TODOs
+- Do not reorder sections unless explicitly asked
+
+## Special Character Escaping
+
+Characters that must be escaped in regular text (outside math mode):
+- `%` → `\%`
+- `_` → `\_`
+- `&` → `\&`
+- `#` → `\#`
+- `$` → `\$` (but not inside math environments)
+- `{` and `}` → `\{` and `\}` (but not when used as LaTeX grouping)
+
+Characters that must NOT be escaped:
+- `$` signs that delimit math mode
+- `{}` used for LaTeX command arguments
+- `%` used for comments
+- `\` used for commands
+
+## Common LaTeX Patterns
+
+- Sectioning: `\section{}`, `\subsection{}`, `\subsubsection{}`, `\paragraph{}`
+- Math: inline `$...$`, display `\[...\]`, numbered `\begin{equation}...\end{equation}`
+- Citations: `\cite{}`, `\citep{}`, `\citet{}`, `\citeauthor{}`, `\citeyear{}`
+- Cross-references: `\ref{}`, `\eqref{}`, `\label{}`, `\autoref{}`, `\cref{}`
+- Figures: `\begin{figure}...\includegraphics{}...\caption{}...\label{}...\end{figure}`
+- Tables: `\begin{table}...\begin{tabular}...\end{tabular}...\caption{}...\end{table}`
+
+## Pitfalls to Avoid
+
+- Unclosed braces `{}` — always count opening and closing braces in your edit
+- Mismatched `\begin{env}` and `\end{env}` — the environment names must be identical
+- Changing `\label{}` values — this breaks all `\ref{}` and `\cref{}` pointing to that label
+- Using text commands inside math mode (e.g., `\textbf{}` inside `$...$` — use `\mathbf{}` instead)
+- Modifying `\cite{}` keys — the key must match a BibTeX entry exactly
+- Introducing unescaped special characters in text mode

@@ -1,0 +1,8 @@
+{
+  "name": "@overleaf/config-system",
+  "private": true,
+  "main": "index.js",
+  "dependencies": {
+    "@overleaf/redis-wrapper": "*"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "mock-ai-service",
+  "version": "1.0.0",
+  "description": "Mock AI service for E2E testing",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "uuid": "^9.0.1"
+  }
+}

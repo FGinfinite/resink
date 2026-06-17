@@ -1,0 +1,134 @@
+import { useCallback, useEffect, useState } from 'react'
+import { useProjectContext } from '@/shared/context/project-context'
+import { getJSON, postJSON } from '@/infrastructure/fetch-json'
+import { debugConsole } from '@/utils/debugging'
+import type {
+  GlobalNotificationPreferencesSchema,
+  NotificationPreferencesSchema,
+} from '../../../../../modules/notifications/app/src/types.js'
+import { sendMB } from '@/infrastructure/event-tracking'
+import { useIdeReactContext } from '@/features/ide-react/context/ide-react-context'
+
+export type SettableNotificationLevel = 'all' | 'replies' | 'off'
+export type NotificationLevel = SettableNotificationLevel | 'global-off'
+
+/**
+ * Map UI notification level to backend preferences
+ */
+function levelToPreferences(
+  level: SettableNotificationLevel
+): NotificationPreferencesSchema {
+  switch (level) {
+    case 'all':
+      return {
+        trackedChangesOnOwnProject: true,
+        trackedChangesOnInvitedProject: true,
+        commentOnOwnProject: true,
+        commentOnInvitedProject: true,
+        repliesOnOwnProject: true,
+        repliesOnInvitedProject: true,
+        repliesOnAuthoredThread: true,
+        repliesOnParticipatingThread: true,
+      }
+    case 'replies':
+      return {
+        trackedChangesOnOwnProject: false,
+        trackedChangesOnInvitedProject: false,
+        commentOnOwnProject: false,
+        commentOnInvitedProject: false,
+        repliesOnOwnProject: false,
+        repliesOnInvitedProject: false,
+        repliesOnAuthoredThread: true,
+        repliesOnParticipatingThread: true,
+      }
+    case 'off':
+      return {
+        trackedChangesOnOwnProject: false,
+        trackedChangesOnInvitedProject: false,
+        commentOnOwnProject: false,
+        commentOnInvitedProject: false,
+        repliesOnOwnProject: false,
+        repliesOnInvitedProject: false,
+        repliesOnAuthoredThread: false,
+        repliesOnParticipatingThread: false,
+      }
+  }
+}
+
+/**
+ * Map backend preferences to UI notification level
+ */
+function preferencesToLevel(
+  preferences: GlobalNotificationPreferencesSchema
+): NotificationLevel {
+  if (preferences.muteAllNotifications) {
+    return 'global-off'
+  }
+
+  // If all notifications are off
+  if (
+    !preferences.commentOnOwnProject &&
+    !preferences.commentOnInvitedProject &&
+    !preferences.repliesOnOwnProject &&
+    !preferences.repliesOnInvitedProject &&
+    !preferences.repliesOnAuthoredThread &&
+    !preferences.repliesOnParticipatingThread
+  ) {
+    return 'off'
+  }
+
+  // If only reply-related notifications are on
+  if (
+    !preferences.commentOnOwnProject &&
+    !preferences.commentOnInvitedProject &&
+    (preferences.repliesOnAuthoredThread ||
+      preferences.repliesOnParticipatingThread)
+  ) {
+    return 'replies'
+  }
+
+  // Default to 'all' for any other combination
+  return 'all'
+}
+
+export function useProjectNotificationPreferences() {
+  const { projectId } = useProjectContext()
+  const { permissionsLevel } = useIdeReactContext()
+  const [notificationLevel, setNotificationLevel] =
+    useState<NotificationLevel>('all')
+  const [isLoading, setIsLoading] = useState(true)
+
+  // Load preferences on mount
+  useEffect(() => {
+    getJSON<GlobalNotificationPreferencesSchema>(
+      `/notifications/preferences/project/${projectId}`
+    )
+      .then(prefs => {
+        setNotificationLevel(preferencesToLevel(prefs))
+      })
+      .catch(debugConsole.error)
+      .finally(() => setIsLoading(false))
+  }, [projectId])
+
+  const setLevel = useCallback(
+    (level: SettableNotificationLevel) => {
+      setNotificationLevel(level)
+      const preferences = levelToPreferences(level)
+      sendMB('setting-changed', {
+        changedSetting: 'projectEmailNotifications',
+        changedSettingVal: level,
+        projectRole: permissionsLevel,
+      })
+      postJSON(`/notifications/preferences/project/${projectId}`, {
+        body: preferences,
+      }).catch(debugConsole.error)
+    },
+    [projectId, permissionsLevel]
+  )
+
+  return {
+    notificationLevel,
+    setNotificationLevel: setLevel,
+    isLoading,
+  }
+}

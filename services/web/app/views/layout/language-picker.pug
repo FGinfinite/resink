@@ -1,0 +1,38 @@
+include ../_mixins/material_symbol
+
+li.dropdown.dropup.subdued.language-picker(dropdown)
+	button#language-picker-toggle.btn.btn-link.btn-inline-link(
+		dropdown-toggle
+		data-ol-lang-selector-tooltip
+		data-bs-toggle='dropdown'
+		aria-haspopup='true'
+		aria-expanded='false'
+		aria-label='Select ' + translate('language')
+		tooltip=translate('language')
+		title=translate('language')
+	)
+		+material-symbol('translate')
+		| &nbsp;
+		span.language-picker-text #{settings.translatedLanguages[currentLngCode]}
+
+	ul.dropdown-menu.dropdown-menu-sm-width(
+		role='menu'
+		aria-labelledby='language-picker-toggle'
+	)
+		li.dropdown-header #{translate("language")}
+		each subdomainDetails, subdomain in settings.i18n.subdomainLang
+			if !subdomainDetails.hide
+				- let isActive = subdomainDetails.lngCode === currentLngCode
+				- let safeLngCode = subdomainDetails.lngCode.replace(/[^a-zA-Z0-9_-]/g, '')
+				- let safeCurrentCode = currentLngCode.replace(/[^a-zA-Z0-9_-]/g, '')
+				li.lng-option
+					a.menu-indent(
+						href='#'
+						onclick=`if('${safeLngCode}'==='${safeCurrentCode}')return false;document.cookie='i18next=${safeLngCode};path=/;max-age=31536000;SameSite=Strict';window.location.reload();return false;`
+						role='menuitem'
+						class=['dropdown-item', {active: isActive}]
+						aria-selected=isActive ? 'true' : 'false'
+					)
+						| #{settings.translatedLanguages[subdomainDetails.lngCode]}
+						if subdomainDetails.lngCode === currentLngCode
+							+material-symbol('check', 'dropdown-item-trailing-icon')

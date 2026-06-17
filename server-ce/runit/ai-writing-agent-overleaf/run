@@ -1,0 +1,12 @@
+#!/bin/bash
+
+NODE_PARAMS=""
+if [ "$DEBUG_NODE" == "true" ]; then
+    echo "running debug - ai-writing-agent"
+    NODE_PARAMS="--inspect=0.0.0.0:30600"
+fi
+
+source /etc/overleaf/env.sh
+export LISTEN_ADDRESS=127.0.0.1
+
+exec /sbin/setuser www-data /usr/bin/node $NODE_PARAMS /overleaf/services/ai-writing-agent/app.js >> /var/log/overleaf/ai-writing-agent.log 2>&1

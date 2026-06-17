@@ -1,0 +1,85 @@
+// ============================================================================
+// Brand Identity — ResInk AI Visual Touches
+// ============================================================================
+
+// ── Brand gradient tokens ──
+:root {
+  --brand-gradient: linear-gradient(135deg, #098842, #10b981);
+  --brand-gradient-subtle: linear-gradient(
+    135deg,
+    rgba(9, 136, 66, 0.6),
+    rgba(16, 185, 129, 0.6)
+  );
+}
+
+// ── 1. Logo micro-glow ──
+.ide-redesign-toolbar-home-link .toolbar-ol-logo {
+  filter: drop-shadow(0 0 6px rgba(16, 185, 129, 0.2));
+}
+
+// ── 2. Toolbar bottom gradient line ──
+.ide-redesign-toolbar {
+  border-bottom: none;
+  position: relative;
+
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--brand-gradient);
+    opacity: 0.4;
+    pointer-events: none;
+  }
+}
+
+// ── 3. Global custom scrollbar ──
+// Note: .ai-assistant has its own scrollbar styles in ai-assistant.scss
+// which will override these due to higher specificity.
+.ide-redesign-main {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(9, 136, 66, 0.25) transparent;
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: rgba(9, 136, 66, 0.25);
+    border-radius: 3px;
+
+    &:hover {
+      background-color: rgba(16, 185, 129, 0.4);
+    }
+  }
+}
+
+// ── 4. Loading spinner brand color ──
+.ide-redesign-main .spinner-border {
+  color: var(--ai-accent, #10b981);
+}
+
+// ── Light theme adjustments ──
+@include theme('light') {
+  .ide-redesign-toolbar-home-link .toolbar-ol-logo {
+    filter: drop-shadow(0 0 4px rgba(9, 136, 66, 0.15));
+  }
+
+  .ide-redesign-toolbar::after {
+    opacity: 0.3;
+  }
+}
+
+// ── Reduced motion ──
+@media (prefers-reduced-motion: reduce) {
+  .ide-redesign-toolbar-home-link .toolbar-ol-logo {
+    filter: none;
+  }
+}

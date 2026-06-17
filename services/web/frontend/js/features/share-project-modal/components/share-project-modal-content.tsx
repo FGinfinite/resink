@@ -1,0 +1,146 @@
+import { useTranslation } from 'react-i18next'
+import { useEditorContext } from '@/shared/context/editor-context'
+import { lazy, Suspense, useState } from 'react'
+import { FullSizeLoadingSpinner } from '@/shared/components/loading-spinner'
+import ClickableElementEnhancer from '@/shared/components/clickable-element-enhancer'
+import {
+  OLModal,
+  OLModalBody,
+  OLModalFooter,
+  OLModalHeader,
+  OLModalTitle,
+} from '@/shared/components/ol/ol-modal'
+import OLNotification from '@/shared/components/ol/ol-notification'
+import OLButton from '@/shared/components/ol/ol-button'
+import OLSpinner from '@/shared/components/ol/ol-spinner'
+import MaterialIcon from '@/shared/components/material-icon'
+import ErrorMessage from '@/features/share-project-modal/components/error-message'
+import classNames from 'classnames'
+import { useFeatureFlag } from '@/shared/context/split-test-context'
+import { useShareProjectContext } from '@/features/share-project-modal/components/share-project-modal'
+
+const ReadOnlyTokenLink = lazy(() =>
+  import('./link-sharing').then(({ ReadOnlyTokenLink }) => ({
+    // re-export as default -- lazy can only handle default exports.
+    default: ReadOnlyTokenLink,
+  }))
+)
+
+const ShareModalBody = lazy(() => import('./share-modal-body'))
+
+type ShareProjectModalContentProps = {
+  cancel: () => void
+  show: boolean
+  animation: boolean
+  inFlight: boolean
+  error: string | undefined
+  projectName?: string
+}
+
+export default function ShareProjectModalContent({
+  show,
+  cancel,
+  animation,
+  inFlight,
+  error,
+  projectName,
+}: ShareProjectModalContentProps) {
+  const { t } = useTranslation()
+  const isSharingUpdatesEnabled = useFeatureFlag('sharing-updates')
+  const [isInvitedPeopleScreen, setIsInvitedPeopleScreen] = useState(false)
+  const { successActionMessage } = useShareProjectContext()
+
+  const { isRestrictedTokenMember } = useEditorContext()
+
+  return (
+    <OLModal show={show} onHide={cancel} animation={animation}>
+      <OLModalHeader>
+        <div className="d-flex flex-grow-1 justify-content-between">
+          {isSharingUpdatesEnabled && isInvitedPeopleScreen ? (
+            <OLButton
+              variant="ghost"
+              onClick={() => setIsInvitedPeopleScreen(false)}
+              leadingIcon="arrow_back_ios_new"
+            >
+              {t('back')}
+            </OLButton>
+          ) : (
+            <OLModalTitle>
+              {isSharingUpdatesEnabled && projectName
+                ? t('share_project_name', { projectName })
+                : t('share_project')}
+            </OLModalTitle>
+          )}
+        </div>
+      </OLModalHeader>
+
+      <OLModalBody
+        className={classNames('modal-body-share modal-link-share', {
+          'modal-redesign': isSharingUpdatesEnabled,
+        })}
+      >
+        <div
+          className={classNames({
+            'container-fluid': !isSharingUpdatesEnabled,
+          })}
+        >
+          <Suspense fallback={<FullSizeLoadingSpinner minHeight="15rem" />}>
+            {isRestrictedTokenMember ? (
+              <ReadOnlyTokenLink />
+            ) : (
+              <ShareModalBody
+                isInvitedPeopleScreen={isInvitedPeopleScreen}
+                setIsInvitedPeopleScreen={setIsInvitedPeopleScreen}
+                error={error}
+              />
+            )}
+          </Suspense>
+          {!isSharingUpdatesEnabled && error && (
+            <OLNotification
+              type="error"
+              content={<ErrorMessage error={error} />}
+              className="mb-0 mt-3"
+            />
+          )}
+        </div>
+      </OLModalBody>
+
+      <OLModalFooter>
+        <div className="d-flex flex-grow-1 flex-wrap gap-2">
+          {isSharingUpdatesEnabled ? (
+            <>
+              {successActionMessage && (
+                <div className="ms-auto px-3 align-self-center">
+                  <div
+                    className="d-flex gap-3 align-items-center"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <MaterialIcon
+                      unfilled
+                      type="check_circle"
+                      className="text-success"
+                    />
+                    <span>{successActionMessage}</span>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            inFlight && <OLSpinner size="sm" />
+          )}
+        </div>
+
+        <ClickableElementEnhancer
+          onClick={cancel}
+          as={OLButton}
+          variant={isSharingUpdatesEnabled ? 'ghost' : 'secondary'}
+          isLoading={isSharingUpdatesEnabled && inFlight}
+          disabled={inFlight}
+        >
+          {t('close')}
+        </ClickableElementEnhancer>
+      </OLModalFooter>
+    </OLModal>
+  )
+}

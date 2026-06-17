@@ -1,0 +1,45 @@
+{
+  "extends": [
+    "eslint:recommended",
+    "standard",
+    "prettier"
+  ],
+  "plugins": [
+    "unicorn"
+  ],
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "module"
+  },
+  "env": {
+    "node": true,
+    "es2022": true
+  },
+  "rules": {
+    "import/no-extraneous-dependencies": "error",
+    "unicorn/prefer-node-protocol": "error",
+    "no-console": "warn",
+    "no-unused-vars": ["error", { "argsIgnorePattern": "^_" }]
+  },
+  "overrides": [
+    {
+      "files": ["test/acceptance/**/*.js"],
+      "env": {
+        "mocha": true
+      },
+      "rules": {
+        "import/no-extraneous-dependencies": ["error", { "devDependencies": true }]
+      }
+    },
+    {
+      "files": ["test/unit/**/*.js"],
+      "rules": {
+        "import/no-extraneous-dependencies": ["error", { "devDependencies": true }]
+      }
+    }
+  ],
+  "ignorePatterns": [
+    "node_modules/",
+    "coverage/"
+  ]
+}
