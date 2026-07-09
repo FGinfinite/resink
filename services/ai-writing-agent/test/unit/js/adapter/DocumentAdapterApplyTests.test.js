@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock @overleaf/settings
@@ -46,6 +47,10 @@ function createMockResponse(body, { status = 200 } = {}) {
     json: async () => body,
     text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
   }
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(value).digest('hex')
 }
 
 describe('DocumentAdapter.applyEdit', () => {
@@ -202,6 +207,74 @@ describe('DocumentAdapter.applyEdit', () => {
       } catch (error) {
         expect(error.name).toBe('VersionConflictError')
       }
+    })
+
+    it('throws RebaseConflictError when live document changed after workspace sync', async () => {
+      const change = {
+        id: 'change-1',
+        projectId: 'proj-1',
+        docId: 'doc-1',
+        baseVersion: 5,
+        position: { start: 0, end: 11 },
+        oldText: 'Hello World',
+        newText: 'Hello Earth',
+        liveConflictBase: {
+          baseVersion: 5,
+          oldSha256: sha256('Hello World'),
+          path: '/main.tex',
+        },
+      }
+
+      mockFetch.mockResolvedValueOnce(
+        createMockResponse({
+          lines: ['Hello External'],
+          version: 6,
+          ranges: {},
+        })
+      )
+
+      try {
+        await adapter.applyEdit(change, { userId: 'user-1' })
+        expect.fail('Should have thrown')
+      } catch (error) {
+        expect(error.name).toBe('RebaseConflictError')
+        expect(error.info.conflictType).toBe('LIVE_CONTENT_CHANGED')
+        expect(error.info.liveBaseVersion).toBe(5)
+      }
+      expect(mockFetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('allows workspace edit when live version advanced but content still matches sync base', async () => {
+      const change = {
+        id: 'change-1',
+        projectId: 'proj-1',
+        docId: 'doc-1',
+        baseVersion: 5,
+        position: { start: 0, end: 11 },
+        oldText: 'Hello World',
+        newText: 'Hello Earth',
+        liveConflictBase: {
+          baseVersion: 5,
+          oldSha256: sha256('Hello World'),
+          path: '/main.tex',
+        },
+      }
+
+      mockFetch.mockResolvedValueOnce(
+        createMockResponse({
+          lines: ['Hello World'],
+          version: 6,
+          ranges: {},
+        })
+      )
+      mockFetch.mockResolvedValueOnce(createMockResponse({}))
+
+      const result = await adapter.applyEdit(change, { userId: 'user-1' })
+
+      expect(result.success).toBe(true)
+      expect(result.wasRebased).toBe(true)
+      const setDocBody = JSON.parse(mockFetch.mock.calls[1][1].body)
+      expect(setDocBody.lines).toEqual(['Hello Earth'])
     })
   })
 

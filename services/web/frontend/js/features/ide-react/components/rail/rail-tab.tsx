@@ -13,14 +13,13 @@ const RailTab = forwardRef<
     open: boolean
     indicator?: ReactElement
     title: string
-    tooltipPlacement?: 'left' | 'right'
   } & ComponentProps<'button'>
->(({ icon, className, eventKey, open, indicator, title, tooltipPlacement = 'right', ...props }, ref) => {
+>(({ icon, className, eventKey, open, indicator, title, ...props }, ref) => {
   return (
     <OLTooltip
       id={`rail-tab-tooltip-${eventKey}`}
       description={title}
-      overlayProps={{ delay: 0, placement: tooltipPlacement }}
+      overlayProps={{ delay: 0, placement: 'right' }}
     >
       <NavLink
         {...props}

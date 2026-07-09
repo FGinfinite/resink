@@ -115,6 +115,7 @@ describe('UserPagesController', function () {
     }))
 
     vi.doMock(
+      // eslint-disable-next-line @overleaf/require-vi-doMock-valid-path -- optional Server Pro module is absent from the CE source tree
       '../../../../modules/oauth2-server/app/src/OAuthPersonalAccessTokenManager',
       () => ({
         default: ctx.PersonalAccessTokenManager,
@@ -229,6 +230,23 @@ describe('UserPagesController', function () {
       await new Promise((resolve, reject) => {
         ctx.res.callback = () => {
           ctx.res.renderedTemplate.should.equal('user/login')
+          resolve()
+        }
+        ctx.UserPagesController.loginPage(
+          ctx.req,
+          ctx.res,
+          ctx.rejectOnError(reject)
+        )
+      })
+    })
+
+    it('should expose oauth errors to the login template', async function (ctx) {
+      ctx.req.query.error = 'github_email_unavailable'
+      await new Promise((resolve, reject) => {
+        ctx.res.callback = () => {
+          ctx.res.renderedVariables.oauthError.should.equal(
+            'github_email_unavailable'
+          )
           resolve()
         }
         ctx.UserPagesController.loginPage(

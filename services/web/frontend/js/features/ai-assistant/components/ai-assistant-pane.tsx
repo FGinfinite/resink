@@ -282,7 +282,6 @@ const AIAssistantPaneContent = memo(function AIAssistantPaneContent() {
             streamingError={state.streamingError}
             onRetry={retryFromError}
             onSkillSelect={handleSkillSelect}
-            sessionId={state.session?.id}
           />
         </div>
 

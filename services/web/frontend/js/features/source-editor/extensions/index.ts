@@ -58,6 +58,7 @@ import { aiQuickEditTooltip } from './ai-quick-edit-tooltip'
 import { tooltipsReposition } from './tooltips-reposition'
 import { selectionListener } from '@/features/source-editor/extensions/selection-listener'
 import { contextMenu } from './context-menu'
+import { tabsListener } from './tabs-listener'
 import { aiChangeExtension } from '@/features/ai-assistant/extensions'
 import { aiAutocomplete } from '@/features/ai-assistant/extensions/ai-autocomplete'
 
@@ -122,7 +123,8 @@ export const createExtensions = (options: Record<string, any>): Extension[] => [
   goToLinePanel(),
   filterCharacters(),
 
-  // AI ghost text autocomplete — must be before autoComplete for Tab priority
+  // AI ghost text autocomplete must be before the built-in completion extension
+  // so its Tab key handling can run first when an AI suggestion is visible.
   aiAutocomplete({ projectId: '', fileName: '' }),
 
   // NOTE: `autoComplete` needs to be before `keybindings` so that arrow key handling
@@ -162,9 +164,12 @@ export const createExtensions = (options: Record<string, any>): Extension[] => [
     ? historyOT(options.currentDoc.currentDocument)
     : ranges(),
   trackDetachedComments(options.currentDoc),
-  visual(options.visual),
+  visual(options.docName, options.visual),
   mathPreview(options.settings.mathPreview),
-  reviewTooltip(options.editorContextMenuEnabled),
+  reviewTooltip(
+    options.settings.floatingMenu,
+    options.editorContextMenuEnabled
+  ),
   aiQuickEditTooltip(),
   contextMenu(options.editorContextMenuEnabled),
   toolbarPanel(),
@@ -186,4 +191,5 @@ export const createExtensions = (options: Record<string, any>): Extension[] => [
   fileTreeItemDrop(),
   tooltipsReposition(),
   selectionListener(options.setEditorSelection),
+  tabsListener(options.settings.editorTabs),
 ]

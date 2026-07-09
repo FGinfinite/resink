@@ -56,6 +56,7 @@ describe('Features', function () {
         expect(ctx.Features.hasFeature('git-bridge')).to.be.false
         expect(ctx.Features.hasFeature('github-sync')).to.be.false
         expect(ctx.Features.hasFeature('homepage')).to.be.false
+        expect(ctx.Features.hasFeature('ai-assistant')).to.be.false
         expect(ctx.Features.hasFeature('link-url')).to.be.false
         expect(ctx.Features.hasFeature('oauth')).to.be.false
         expect(ctx.Features.hasFeature('saas')).to.be.false
@@ -116,6 +117,7 @@ describe('Features', function () {
           describe('with all other settings flags', function () {
             beforeEach(function (ctx) {
               ctx.settings.enableHomepage = true
+              ctx.settings.enableAiAssistant = true
               ctx.settings.enableGitBridge = true
               ctx.settings.enableGithubSync = true
               ctx.settings.enableSaml = true
@@ -129,6 +131,7 @@ describe('Features', function () {
               expect(ctx.Features.hasFeature('github-sync')).to.be.true
               expect(ctx.Features.hasFeature('git-bridge')).to.be.true
               expect(ctx.Features.hasFeature('homepage')).to.be.true
+              expect(ctx.Features.hasFeature('ai-assistant')).to.be.true
               expect(ctx.Features.hasFeature('link-url')).to.be.true
               expect(ctx.Features.hasFeature('oauth')).to.be.true
               expect(ctx.Features.hasFeature('saas')).to.be.true

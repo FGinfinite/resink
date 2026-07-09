@@ -107,7 +107,7 @@ async function doCompile(request, stats, timings) {
 
   let resourceList, baseHistoryVersion
   try {
-    if (request.rawChangeOperations) {
+    if (request.isCompileFromHistory) {
       ;({ resourceList, baseHistoryVersion } =
         await HistoryResourceWriter.syncResourcesToDisk(
           projectId,
@@ -190,6 +190,11 @@ async function doCompile(request, stats, timings) {
     if (request.check === 'validate') {
       env.CHKTEX_VALIDATE = 1
     }
+  }
+
+  // Pass through checkpoint setting
+  if (request.enableCheckpoint) {
+    env.ENABLE_CHECKPOINT = '1'
   }
 
   const compileStart = Date.now()
@@ -626,7 +631,8 @@ async function _runSynctex(projectId, userId, command, opts) {
           imageName || defaultImageName,
           timeout,
           {},
-          compileGroup
+          compileGroup,
+          null
         )
         return {
           stdout,
@@ -674,7 +680,8 @@ async function wordcount(projectId, userId, filename, image) {
       image,
       timeout,
       {},
-      compileGroup
+      compileGroup,
+      null
     )
     const results = _parseWordcountFromOutput(stdout)
     logger.debug(
@@ -860,7 +867,7 @@ function _emitMetrics(request, status, stats, timings) {
   if (timings.compileE2E != null) {
     ClsiMetrics.e2eCompileDurationSeconds.observe(
       {
-        compileFromHistory: !!request.rawChangeOperations,
+        compileFromHistory: request.isCompileFromHistory,
         compile: request.metricsOpts.compile,
         group: request.compileGroup,
       },

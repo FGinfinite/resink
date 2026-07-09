@@ -33,6 +33,11 @@ export type OLAutocompleteProps = {
   inputRef?: React.ForwardedRef<HTMLInputElement>
   expandUp?: boolean
   onClose?: () => void
+  isOpen?: boolean
+  scrollIntoView?: (
+    node: HTMLElement | null,
+    menuNode: HTMLElement | null
+  ) => void
 }
 
 type OLAutocompleteDisplayItem =
@@ -59,6 +64,8 @@ function OLAutocompleteInternal({
   inputRef,
   expandUp = false,
   onClose,
+  isOpen: controlledIsOpen,
+  scrollIntoView,
 }: OLAutocompleteProps) {
   const { t } = useTranslation()
 
@@ -140,6 +147,8 @@ function OLAutocompleteInternal({
     inputValue: internalInputValue,
     items: displayItems,
     defaultHighlightedIndex: 0,
+    ...(controlledIsOpen !== undefined && { isOpen: controlledIsOpen }),
+    ...(scrollIntoView !== undefined && { scrollIntoView }),
     itemToString: item => {
       if (!item) return ''
       return item.type === 'create' ? item.inputValue : item.label

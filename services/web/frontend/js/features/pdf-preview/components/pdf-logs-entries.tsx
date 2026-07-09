@@ -1,4 +1,4 @@
-import { ElementType, memo, type ReactNode } from 'react'
+import { ElementType, memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import PreviewLogsPaneMaxEntries from '../../preview/components/preview-logs-pane-max-entries'
 import PdfLogEntry from './pdf-log-entry'
@@ -18,11 +18,9 @@ const pdfLogEntriesComponents = importOverleafModules(
 function PdfLogsEntries({
   entries,
   hasErrors,
-  renderEntryAction,
 }: {
   entries: LogEntry[]
   hasErrors?: boolean
-  renderEntryAction?: (entry: LogEntry) => ReactNode
 }) {
   const { t } = useTranslation()
   const { syncToEntry } = useDetachCompileContext()
@@ -66,7 +64,6 @@ function PdfLogsEntries({
             column: logEntry.column,
           }}
           onSourceLocationClick={syncToEntry}
-          extraActions={renderEntryAction?.(logEntry)}
         />
       ))}
     </>

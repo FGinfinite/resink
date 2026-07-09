@@ -433,7 +433,6 @@ const AIQuickEditToolbarContent = memo<ToolbarContentProps>(
                     }
                   }}
                   disabled={loading}
-                  autoFocus
                 />
               </div>
               <div className="ai-quick-edit-stage2-actions">

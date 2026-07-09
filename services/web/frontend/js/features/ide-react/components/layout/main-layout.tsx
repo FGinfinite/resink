@@ -8,13 +8,12 @@ import { HorizontalToggler } from '@/features/ide-react/components/resize/horizo
 import { useTranslation } from 'react-i18next'
 import { usePdfPane } from '@/features/ide-react/hooks/use-pdf-pane'
 import { useLayoutContext } from '@/shared/context/layout-context'
-import { ElementType, useCallback, useState } from 'react'
+import { ElementType, useState } from 'react'
 import EditorPanel from '../editor/editor-panel'
 import { useRailContext } from '../../context/rail-context'
 import HistoryContainer from '@/features/ide-react/components/history-container'
 import { DefaultSynctexControl } from '@/features/pdf-preview/components/detach-synctex-control'
 import importOverleafModules from '../../../../../macros/import-overleaf-module.macro'
-import { RightRailLayout } from '@/features/ai-assistant/components/right-rail'
 
 const mainEditorLayoutPanels: Array<{
   import: { default: ElementType }
@@ -28,7 +27,6 @@ const mainEditorLayoutModalsModules: Array<{
 
 export default function MainLayout() {
   const [resizing, setResizing] = useState(false)
-  const [rightRailResizing, setRightRailResizing] = useState(false)
   const { resizing: railResizing } = useRailContext()
   const {
     togglePdfPane,
@@ -53,7 +51,7 @@ export default function MainLayout() {
           autoSaveId="ide-redesign-outer-layout"
           direction="horizontal"
           className={classNames('ide-redesign-inner', {
-            'ide-panel-group-resizing': resizing || railResizing || rightRailResizing,
+            'ide-panel-group-resizing': resizing || railResizing,
           })}
         >
           <RailLayout />
@@ -128,10 +126,9 @@ export default function MainLayout() {
               </Panel>
             </PanelGroup>
           </Panel>
-          <RightRailLayout onResizing={setRightRailResizing} />
           {mainEditorLayoutPanels.map(
             ({ import: { default: Component }, path }, i) => {
-              return <Component key={path} order={i + 4} />
+              return <Component key={path} order={i + 3} />
             }
           )}
         </PanelGroup>

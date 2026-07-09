@@ -31,6 +31,9 @@ const { Tool, ToolResult, ToolValidationError } = await import(
 const { ToolRegistry } = await import(
   '../../../../app/js/tool/ToolRegistry.js'
 )
+const { ToolsetPolicy } = await import(
+  '../../../../app/js/tool/ToolsetPolicy.js'
+)
 
 // Create a concrete test tool subclass
 class TestTool extends Tool {
@@ -135,6 +138,34 @@ describe('ToolRegistry', () => {
     })
   })
 
+  describe('scoped', () => {
+    it('exposes only tools allowed by policy', () => {
+      const readTool = new TestTool('read_document', 'Read document')
+      const editTool = new TestTool('edit_document', 'Edit document')
+      registry.register(readTool)
+      registry.register(editTool)
+
+      const scoped = registry.scoped(['read_document'])
+
+      expect(scoped.has('read_document')).toBe(true)
+      expect(scoped.has('edit_document')).toBe(false)
+      expect(scoped.get('read_document')).toBe(readTool)
+      expect(scoped.get('edit_document')).toBeUndefined()
+      expect(scoped.getNames()).toEqual(['read_document'])
+      expect(scoped.getTools().map(tool => tool.function.name)).toEqual(['read_document'])
+      expect(scoped.size).toBe(1)
+    })
+
+    it('ignores allowed names that are not registered', () => {
+      registry.register(new TestTool('read_document', 'Read document'))
+
+      const scoped = registry.scoped(['read_document', 'missing_tool'])
+
+      expect(scoped.getNames()).toEqual(['read_document'])
+      expect(scoped.getAll()).toHaveLength(1)
+    })
+  })
+
   describe('unregister', () => {
     it('removes tool', () => {
       registry.register(new TestTool())
@@ -177,6 +208,185 @@ describe('ToolRegistry', () => {
       registry.unregister('t1')
       expect(registry.size).toBe(1)
     })
+  })
+})
+
+describe('ToolsetPolicy', () => {
+  it('maps profiles to model-visible tool names', () => {
+    const policy = new ToolsetPolicy()
+
+    const resolved = policy.resolve({ profile: 'citation-assistant' })
+
+    expect(resolved.profile).toBe('citation-assistant')
+    expect(resolved.toolsets).toEqual(['project-read', 'citation'])
+    expect(resolved.tools).toEqual([
+      'list_files',
+      'read_document',
+      'search_project',
+      'view_file',
+      'doc_structure_map',
+      'bib_lookup',
+      'bib_manage',
+    ])
+  })
+
+  it('falls back to default for unknown profiles', () => {
+    const policy = new ToolsetPolicy()
+
+    const resolved = policy.resolve({ profile: 'unknown-profile' })
+
+    expect(resolved.profile).toBe('default')
+    expect(resolved.tools).toContain('edit_document')
+    expect(resolved.tools).toContain('sync_workspace_changes')
+    expect(resolved.tools).toContain('compile_latex')
+    expect(resolved.tools).toContain('run_command')
+    expect(resolved.tools).toContain('write_workspace_file')
+    expect(resolved.tools).toContain('read_skill_reference')
+    expect(resolved.tools).toContain('run_skill_script')
+    expect(resolved.tools).toContain('start_agent_task')
+    expect(resolved.tools).toContain('start_agent_team')
+    expect(resolved.tools).toContain('handoff_to_agent')
+    expect(resolved.tools).toContain('return_from_handoff')
+    expect(resolved.tools).not.toContain('delegate_task')
+    expect(resolved.tools).toContain('inspect_python_environment')
+    expect(resolved.tools).toContain('propose_memory')
+  })
+
+  it('exposes structured agent team tools instead of legacy delegate tool', () => {
+    const policy = new ToolsetPolicy()
+
+    const resolved = policy.resolve({ profile: 'default' })
+
+    expect(resolved.toolsets).toContain('subagent')
+    expect(resolved.tools).toContain('start_agent_task')
+    expect(resolved.tools).toContain('start_agent_team')
+    expect(resolved.tools).toContain('handoff_to_agent')
+    expect(resolved.tools).toContain('return_from_handoff')
+    expect(resolved.tools).not.toContain('delegate_task')
+  })
+
+  it('narrows profile toolsets with user/project policy', () => {
+    const policy = new ToolsetPolicy()
+
+    const resolved = policy.resolve({
+      profile: 'default',
+      policy: {
+        allowWrite: false,
+        allowSubagents: false,
+        allowHandoff: false,
+        allowDiagnostics: false,
+      },
+    })
+
+    expect(resolved.tools).not.toContain('edit_document')
+    expect(resolved.tools).not.toContain('delete_file')
+    expect(resolved.tools).not.toContain('start_agent_task')
+    expect(resolved.tools).not.toContain('start_agent_team')
+    expect(resolved.tools).not.toContain('handoff_to_agent')
+    expect(resolved.tools).not.toContain('return_from_handoff')
+    expect(resolved.tools).not.toContain('delegate_task')
+    expect(resolved.tools).not.toContain('activate_skill')
+    expect(resolved.tools).not.toContain('inspect_python_environment')
+    expect(resolved.tools).toContain('propose_memory')
+    expect(resolved.tools).toContain('run_command')
+    expect(resolved.tools).toContain('write_workspace_file')
+    expect(resolved.tools).toContain('sync_workspace_changes')
+    expect(resolved.tools).toContain('read_document')
+    expect(resolved.tools).toContain('bib_lookup')
+  })
+
+
+  it('keeps exec tools in default profile and out of read-only profiles', () => {
+    const policy = new ToolsetPolicy()
+
+    const defaults = policy.resolve({ profile: 'default' })
+    const readOnly = policy.resolve({ profile: 'read-only' })
+    const auditor = policy.resolve({ profile: 'document-auditor' })
+
+    expect(defaults.toolsets).toContain('exec')
+    expect(defaults.tools).toContain('run_command')
+    expect(defaults.tools).toContain('write_workspace_file')
+    expect(defaults.tools).toContain('sync_workspace_changes')
+    expect(defaults.tools).toContain('read_skill_reference')
+    expect(defaults.tools).toContain('run_skill_script')
+    expect(readOnly.tools).not.toContain('run_command')
+    expect(readOnly.tools).not.toContain('write_workspace_file')
+    expect(auditor.tools).not.toContain('run_command')
+    expect(auditor.tools).not.toContain('write_workspace_file')
+  })
+
+  it('supports disabling exec tools with policy', () => {
+    const policy = new ToolsetPolicy()
+
+    const resolved = policy.resolve({
+      profile: 'default',
+      policy: { allowExec: false },
+    })
+
+    expect(resolved.toolsets).not.toContain('exec')
+    expect(resolved.tools).not.toContain('run_command')
+    expect(resolved.tools).not.toContain('write_workspace_file')
+    expect(resolved.tools).toContain('compile_latex')
+  })
+
+
+  it('supports disabling workspace sync tools with policy', () => {
+    const policy = new ToolsetPolicy()
+
+    const resolved = policy.resolve({
+      profile: 'default',
+      policy: { allowWorkspaceSync: false },
+    })
+
+    expect(resolved.toolsets).not.toContain('workspace-sync')
+    expect(resolved.tools).not.toContain('sync_workspace_changes')
+    expect(resolved.tools).toContain('edit_document')
+  })
+
+
+  it('supports disabling skill runtime tools with policy', () => {
+    const policy = new ToolsetPolicy()
+
+    const resolved = policy.resolve({
+      profile: 'default',
+      policy: { allowSkillRuntime: false },
+    })
+
+    expect(resolved.toolsets).not.toContain('skill-runtime')
+    expect(resolved.tools).not.toContain('read_skill_reference')
+    expect(resolved.tools).not.toContain('run_skill_script')
+    expect(resolved.tools).toContain('activate_skill')
+    expect(resolved.tools).toContain('inspect_python_environment')
+  })
+
+  it('supports explicit allow and deny tool name narrowing', () => {
+    const policy = new ToolsetPolicy()
+
+    const resolved = policy.resolve({
+      profile: 'default',
+      allowedToolNames: ['read_document', 'edit_document', 'delegate_task'],
+      deniedToolNames: ['delegate_task'],
+    })
+
+    expect(resolved.tools).toEqual(['read_document', 'edit_document'])
+  })
+
+  it('supports disabling memory proposal tools for child agents', () => {
+    const policy = new ToolsetPolicy()
+
+    const root = policy.resolve({
+      profile: 'default',
+      policy: { allowMemoryProposals: true },
+    })
+    const child = policy.resolve({
+      profile: 'default',
+      policy: { allowMemoryProposals: false },
+    })
+
+    expect(root.toolsets).toContain('memory')
+    expect(root.tools).toContain('propose_memory')
+    expect(child.toolsets).not.toContain('memory')
+    expect(child.tools).not.toContain('propose_memory')
   })
 })
 

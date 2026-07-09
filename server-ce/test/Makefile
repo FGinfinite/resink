@@ -11,6 +11,7 @@ export TEX_LIVE_DOCKER_IMAGE ?= us-east1-docker.pkg.dev/overleaf-ops/ol-docker/t
 export ALL_TEX_LIVE_DOCKER_IMAGES ?= us-east1-docker.pkg.dev/overleaf-ops/ol-docker/texlive-full:2023.1,us-east1-docker.pkg.dev/overleaf-ops/ol-docker/texlive-full:2022.1
 export IMAGE_TAG_CE ?= sharelatex/sharelatex:main
 export IMAGE_TAG_PRO ?= us-east1-docker.pkg.dev/overleaf-ops/ol-docker/pro:main
+export IMAGE_TAG_GIT_BRIDGE ?= us-east1-docker.pkg.dev/overleaf-ops/ol-docker/git-bridge:main
 export CYPRESS_SHARD ?=
 export COMPOSE_PROJECT_NAME ?= test
 export USER_UID=$(shell id -u)
@@ -47,7 +48,7 @@ test-e2e-native-linux:
 		docker compose -f docker-compose.yml -f docker-compose.native.yml up --no-log-prefix cypress
 
 test-e2e:
-	docker compose build host-admin
+	docker compose build host-admin e2e
 	docker compose up --detach --wait host-admin
 	docker compose up --detach --wait mongo
 	docker compose up --no-log-prefix --exit-code-from=e2e e2e host-admin
@@ -81,7 +82,7 @@ prefetch_default_compose:
 
 prefetch_default: prefetch_default_compose_build
 prefetch_default_compose_build:
-	docker compose build host-admin
+	docker compose build host-admin e2e
 
 prefetch: prefetch_custom
 prefetch_custom: prefetch_custom_compose_pull

@@ -23,11 +23,12 @@ import type {
   ToolCallStatus,
   StreamingPhase,
   AttachmentInfo,
-  ModelSlotInfo,
+  AgentTeamRun,
 } from '../types/ai-types'
 import * as aiApi from '../api/ai-api'
 import type { Reference } from '../components/chat-input/types'
 import { useAIStatusUpdater } from './ai-status-context'
+import { debugConsole } from '@/utils/debugging'
 
 // ============================================================================
 // Initial State
@@ -54,6 +55,7 @@ const initialState: AIAssistantState = {
   selectedModelSlot: null,
   availableModelSlots: [],
   modelSlotsLoaded: false,
+  teamRuns: [],
 }
 
 // ============================================================================
@@ -122,6 +124,15 @@ function routeBlockUpdate(
   }
 }
 
+function compareTeamRuns(a: AgentTeamRun, b: AgentTeamRun): number {
+  const aStarted = a.team.startedAt ?? 0
+  const bStarted = b.team.startedAt ?? 0
+  if (aStarted !== bStarted) {
+    return bStarted - aStarted
+  }
+  return a.team.id.localeCompare(b.team.id)
+}
+
 function aiAssistantReducer(
   state: AIAssistantState,
   action: AIAssistantAction
@@ -145,6 +156,7 @@ function aiAssistantReducer(
         selectedModelSlot: state.selectedModelSlot,
         availableModelSlots: state.availableModelSlots,
         modelSlotsLoaded: state.modelSlotsLoaded,
+        teamRuns: [],
       }
 
     case 'INIT_FAILURE':
@@ -177,6 +189,7 @@ function aiAssistantReducer(
         initialized: true,
         tokenUsage: null,
         compactionStatus: null,
+        teamRuns: [],
       }
 
     case 'CREATE_SESSION_FAILURE':
@@ -194,6 +207,7 @@ function aiAssistantReducer(
         selectedModelSlot: state.selectedModelSlot,
         availableModelSlots: state.availableModelSlots,
         modelSlotsLoaded: state.modelSlotsLoaded,
+        teamRuns: [],
       }
 
     case 'RENAME_SESSION':
@@ -621,6 +635,20 @@ function aiAssistantReducer(
     case 'SET_AVAILABLE_MODEL_SLOTS':
       return { ...state, availableModelSlots: action.slots, modelSlotsLoaded: true }
 
+    case 'SET_TEAM_RUNS':
+      return { ...state, teamRuns: action.teamRuns }
+
+    case 'UPSERT_TEAM_RUN': {
+      const nextTeamRuns = state.teamRuns.filter(
+        item => item.team.id !== action.teamRun.team.id
+      )
+      nextTeamRuns.push(action.teamRun)
+      return {
+        ...state,
+        teamRuns: nextTeamRuns.sort(compareTeamRuns),
+      }
+    }
+
     default:
       throw new Error(`Unknown action type`)
   }
@@ -657,6 +685,9 @@ interface AIAssistantContextValue {
   setAutoAccept: (value: boolean) => void
   // Context compaction
   compactSession: () => Promise<void>
+  refreshTeamRun: () => Promise<void>
+  cancelTeamRun: (teamId: string) => Promise<void>
+  retryTeamRunTask: (teamId: string, taskId: string) => Promise<void>
   // Model selection
   setModelSlot: (slug: string) => void
   currentModelSupportsImage: boolean
@@ -707,6 +738,8 @@ export const AIAssistantProvider: FC<React.PropsWithChildren> = ({
     activeSessionIdRef.current = state.session?.id ?? null
   }, [state.session?.id])
 
+  const hydratedUrlSessionRef = useRef<string | null>(null)
+
   // Auto-accept: persisted user preference
   const [autoAccept, setAutoAccept] = usePersistedState<boolean>(
     'ai-auto-accept',
@@ -723,6 +756,10 @@ export const AIAssistantProvider: FC<React.PropsWithChildren> = ({
     'ai-selected-model-slot',
     null
   )
+  const selectedModelSlotRef = useRef(state.selectedModelSlot)
+  useEffect(() => {
+    selectedModelSlotRef.current = state.selectedModelSlot
+  }, [state.selectedModelSlot])
 
   // Load model slots on mount
   useEffect(() => {
@@ -737,19 +774,20 @@ export const AIAssistantProvider: FC<React.PropsWithChildren> = ({
         dispatch({ type: 'SET_MODEL_SLOT', slug: effectiveSlot })
         if (!valid) setPersistedModelSlot(effectiveSlot)
       })
-      .catch(err => console.warn('Failed to load model slots', err))
+      .catch(err => debugConsole.warn('Failed to load model slots', err))
     return () => { cancelled = true }
   }, [aiEnabled]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Cleanup on unmount
   useEffect(() => {
+    const fallbackTimers = confirmFallbackTimers.current
     return () => {
       abortControllerRef.current?.abort()
       // Clear all pending fallback timers
-      for (const { timer } of confirmFallbackTimers.current.values()) {
+      for (const { timer } of fallbackTimers.values()) {
         clearTimeout(timer)
       }
-      confirmFallbackTimers.current.clear()
+      fallbackTimers.clear()
     }
   }, [])
 
@@ -848,7 +886,10 @@ export const AIAssistantProvider: FC<React.PropsWithChildren> = ({
       // Only include successfully uploaded attachments to avoid broken IDs in messages.
       const displayAttachments = pendingAttachments
         ?.filter(a => a.uploadStatus === 'uploaded' || !a.uploadStatus)
-        .map(({ localPreviewUrl, ...rest }) => rest)
+        .map(attachment => {
+          const { localPreviewUrl: _localPreviewUrl, ...rest } = attachment
+          return rest
+        })
 
       const messageId = generateMessageId()
       dispatch({ type: 'SEND_MESSAGE_START', content: displayContent, messageId, skill, attachments: displayAttachments })
@@ -882,7 +923,7 @@ export const AIAssistantProvider: FC<React.PropsWithChildren> = ({
           displayContent,
           context,
           abortController.signal,
-          state.selectedModelSlot || undefined
+          selectedModelSlotRef.current || undefined
         )
 
         let streamTerminated = false
@@ -948,7 +989,12 @@ export const AIAssistantProvider: FC<React.PropsWithChildren> = ({
       if (project?.rootDocId) context.rootDocId = project.rootDocId
       if (project?.name) context.projectName = project.name
 
-      const stream = aiApi.resumeMessage(sessionId, context, abortController.signal, state.selectedModelSlot || undefined)
+      const stream = aiApi.resumeMessage(
+        sessionId,
+        context,
+        abortController.signal,
+        selectedModelSlotRef.current || undefined
+      )
 
       let streamTerminated = false
       for await (const event of stream) {
@@ -1089,6 +1135,56 @@ export const AIAssistantProvider: FC<React.PropsWithChildren> = ({
     []
   )
 
+  useEffect(() => {
+    if (!aiEnabled || typeof window === 'undefined') return
+
+    const sessionId = new URLSearchParams(window.location.search).get('aiSession')
+    if (!sessionId || hydratedUrlSessionRef.current === sessionId) return
+    if (state.session?.id === sessionId) return
+
+    hydratedUrlSessionRef.current = sessionId
+    switchSession(sessionId)
+  }, [aiEnabled, state.session?.id, switchSession])
+
+  const refreshTeamRun = useCallback(async () => {
+    const sessionId = state.session?.id
+    if (!sessionId) {
+      dispatch({ type: 'SET_TEAM_RUNS', teamRuns: [] })
+      return
+    }
+
+    try {
+      const summaries = await aiApi.listTeamRuns(sessionId)
+      const teamRuns = await Promise.all(
+        summaries.map(summary => aiApi.getTeamRun(sessionId, summary.id))
+      )
+      dispatch({ type: 'SET_TEAM_RUNS', teamRuns: teamRuns.sort(compareTeamRuns) })
+    } catch {
+      dispatch({ type: 'SET_TEAM_RUNS', teamRuns: [] })
+    }
+  }, [state.session?.id])
+
+  useEffect(() => {
+    if (!aiEnabled) return
+    refreshTeamRun()
+  }, [aiEnabled, state.session?.id, state.session?.activeHandoff?.teamId, refreshTeamRun])
+
+  const cancelTeamRun = useCallback(async (teamId: string) => {
+    const session = state.session
+    if (!session?.id || !teamId) return
+
+    const teamRun = await aiApi.cancelTeamRun(session.id, teamId)
+    dispatch({ type: 'UPSERT_TEAM_RUN', teamRun })
+  }, [state.session])
+
+  const retryTeamRunTask = useCallback(async (teamId: string, taskId: string) => {
+    const sessionId = state.session?.id
+    if (!sessionId) return
+
+    const response = await aiApi.retryTeamRunTask(sessionId, teamId, taskId)
+    dispatch({ type: 'UPSERT_TEAM_RUN', teamRun: response.teamRun })
+  }, [state.session?.id])
+
   // Rename session
   const renameSession = useCallback(
     async (title: string) => {
@@ -1198,6 +1294,9 @@ export const AIAssistantProvider: FC<React.PropsWithChildren> = ({
       autoAccept,
       setAutoAccept,
       compactSession,
+      refreshTeamRun,
+      cancelTeamRun,
+      retryTeamRunTask,
       setModelSlot,
       currentModelSupportsImage,
       isStreaming: state.status === 'streaming',
@@ -1224,6 +1323,9 @@ export const AIAssistantProvider: FC<React.PropsWithChildren> = ({
       autoAccept,
       setAutoAccept,
       compactSession,
+      refreshTeamRun,
+      cancelTeamRun,
+      retryTeamRunTask,
       setModelSlot,
       currentModelSupportsImage,
     ]

@@ -69,7 +69,7 @@
 
   .loading-screen-brand {
     position: relative;
-    padding-top: math.percentage(math.div(157, 136)); // dimensions of the ResInk logo SVG (viewBox 136×157)
+    padding-top: math.percentage(math.div(150, 130)); // dimensions of the SVG
     height: 0;
     background: var(--loading-screen-ol-logo-empty-url) no-repeat bottom / 100%;
 

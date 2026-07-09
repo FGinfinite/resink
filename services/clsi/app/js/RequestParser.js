@@ -3,7 +3,9 @@ import settings from '@overleaf/settings'
 import OutputCacheManager from './OutputCacheManager.js'
 
 const VALID_COMPILERS = ['pdflatex', 'latex', 'xelatex', 'lualatex']
-const MAX_TIMEOUT = 600
+function getMaxTimeout() {
+  return settings.maxCompileTimeoutSeconds || 600
+}
 const EDITOR_ID_REGEX = /^[a-f0-9-]{36}$/ // UUID
 const HISTORY_ID_REGEX = /^([0-9a-f]{24}|[1-9][0-9]{0,9})$/ // mongo id or postgres id
 
@@ -65,8 +67,13 @@ function parse(body, callback) {
         type: 'number',
       }
     )
+    response.enableCheckpoint = _parseAttribute(
+      'enableCheckpoint',
+      compile.options.enableCheckpoint,
+      { default: false, type: 'boolean' }
+    )
     response.timeout = _parseAttribute('timeout', compile.options.timeout, {
-      default: MAX_TIMEOUT,
+      default: getMaxTimeout(),
       type: 'number',
     })
     response.imageName = _parseAttribute(
@@ -138,8 +145,9 @@ function parse(body, callback) {
       { type: 'string' }
     )
 
-    if (response.timeout > MAX_TIMEOUT) {
-      response.timeout = MAX_TIMEOUT
+    const maxTimeout = getMaxTimeout()
+    if (response.timeout > maxTimeout) {
+      response.timeout = maxTimeout
     }
     response.timeout = response.timeout * 1000 // milliseconds
 
@@ -162,6 +170,7 @@ function parse(body, callback) {
     // The snapshot and changes are validated when loading them in editor-core.
     response.rawSnapshot = compile.rawSnapshot
     response.rawChangeOperations = compile.rawChangeOperations
+    response.isCompileFromHistory = !!response.rawChangeOperations
 
     // v1 conversions / submissions
     if (compile.filestoreBlobPrefix) {
@@ -286,4 +295,10 @@ function _checkPath(path) {
   return path
 }
 
-export default { parse, MAX_TIMEOUT, promises: { parse: promisify(parse) } }
+export default {
+  parse,
+  get MAX_TIMEOUT() {
+    return getMaxTimeout()
+  },
+  promises: { parse: promisify(parse) },
+}

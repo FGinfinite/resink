@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import express from 'express'
 
 const MODULE_PATH = '../../../../app/src/infrastructure/Translations.mjs'
 
@@ -6,14 +7,12 @@ describe('Translations', function () {
   let req, res, translations
   async function runMiddlewares(cb) {
     return await new Promise((resolve, reject) =>
-      translations.i18nMiddleware(req, res, () => {
-        translations.setLangBasedOnDomainMiddleware(req, res, (err, result) => {
-          if (err) {
-            reject(err)
-          } else {
-            resolve(result)
-          }
-        })
+      translations.setLangBasedOnDomainMiddleware(req, res, (err, result) => {
+        if (err) {
+          reject(err)
+        } else {
+          resolve(result)
+        }
       })
     )
   }
@@ -25,6 +24,7 @@ describe('Translations', function () {
           escapeHTMLInVars: false,
           subdomainLang: {
             www: { lngCode: 'en', url: 'https://www.overleaf.com' },
+            zh: { lngCode: 'zh-CN', url: 'https://www.overleaf.com' },
             fr: { lngCode: 'fr', url: 'https://fr.overleaf.com' },
             da: { lngCode: 'da', url: 'https://da.overleaf.com' },
           },
@@ -39,6 +39,8 @@ describe('Translations', function () {
       headers: {
         'accept-language': '',
       },
+      cookies: {},
+      acceptsLanguages: express.request.acceptsLanguages,
     }
     res = {
       locals: {},
@@ -105,6 +107,15 @@ describe('Translations', function () {
       req.headers.host = 'fr.overleaf.com'
       await runMiddlewares()
       expect(req.lng).to.equal('fr')
+    })
+
+    it('should prefer a supported cookie language over the host language', async function () {
+      req.headers.host = 'fr.overleaf.com'
+      req.headers['accept-language'] = 'da, en;q=0.8'
+      req.cookies.i18next = 'zh-CN'
+      await runMiddlewares()
+      expect(req.lng).to.equal('zh-CN')
+      expect(res.locals.suggestedLanguageSubdomainConfig).to.not.exist
     })
 
     describe('suggestedLanguageSubdomainConfig', function () {

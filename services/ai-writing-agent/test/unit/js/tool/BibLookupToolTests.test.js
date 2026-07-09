@@ -64,6 +64,20 @@ const { BibLookupTool } = await import(
   '../../../../app/js/tool/bib_lookup.js'
 )
 
+function mockApiResponse(body, options = {}) {
+  const text = typeof body === 'string' ? body : JSON.stringify(body)
+  return {
+    ok: options.ok ?? true,
+    status: options.status ?? 200,
+    statusText: options.statusText || 'OK',
+    headers: {
+      get: vi.fn(name => options.headers?.[name] || null),
+    },
+    text: vi.fn(async () => text),
+    body: ReadableStream.from([new TextEncoder().encode(text)]),
+  }
+}
+
 describe('BibLookupTool', () => {
   let tool
   let mockContext
@@ -99,11 +113,7 @@ describe('BibLookupTool', () => {
         ],
       }
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify(s2Response),
-      })
+      mockFetch.mockResolvedValueOnce(mockApiResponse(s2Response))
 
       const result = await tool.execute(
         { query: 'attention is all you need', source: 'auto', limit: 5, format: 'summary' },
@@ -128,11 +138,7 @@ describe('BibLookupTool', () => {
         externalIds: { DOI: '10.1234/test.2020' },
       }
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify(s2Response),
-      })
+      mockFetch.mockResolvedValueOnce(mockApiResponse(s2Response))
 
       const result = await tool.execute(
         { query: '10.1234/test.2020', source: 'auto', limit: 5, format: 'summary' },
@@ -150,11 +156,7 @@ describe('BibLookupTool', () => {
 
     it('falls back to CrossRef when Semantic Scholar returns empty', async () => {
       // Semantic Scholar returns empty
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ data: [] }),
-      })
+      mockFetch.mockResolvedValueOnce(mockApiResponse({ data: [] }))
 
       // CrossRef returns results
       const crossrefResponse = {
@@ -173,11 +175,7 @@ describe('BibLookupTool', () => {
         },
       }
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify(crossrefResponse),
-      })
+      mockFetch.mockResolvedValueOnce(mockApiResponse(crossrefResponse))
 
       const result = await tool.execute(
         { query: 'some obscure topic', source: 'auto', limit: 5, format: 'summary' },
@@ -192,12 +190,11 @@ describe('BibLookupTool', () => {
 
     it('retries on 429 rate limit', async () => {
       // First attempt: 429
-      mockFetch.mockResolvedValueOnce({
+      mockFetch.mockResolvedValueOnce(mockApiResponse('Rate limited', {
         ok: false,
         status: 429,
         statusText: 'Too Many Requests',
-        text: async () => 'Rate limited',
-      })
+      }))
 
       // Second attempt: success
       const s2Response = {
@@ -213,11 +210,7 @@ describe('BibLookupTool', () => {
           },
         ],
       }
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify(s2Response),
-      })
+      mockFetch.mockResolvedValueOnce(mockApiResponse(s2Response))
 
       const result = await tool.execute(
         { query: 'retry test', source: 'semanticscholar', limit: 5, format: 'summary' },
@@ -247,18 +240,10 @@ describe('BibLookupTool', () => {
     })
 
     it('returns empty results message', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ data: [] }),
-      })
+      mockFetch.mockResolvedValueOnce(mockApiResponse({ data: [] }))
 
       // CrossRef also empty (auto fallback)
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ message: { items: [] } }),
-      })
+      mockFetch.mockResolvedValueOnce(mockApiResponse({ message: { items: [] } }))
 
       const result = await tool.execute(
         { query: 'xyznonexistent12345', source: 'auto', limit: 5, format: 'summary' },
@@ -285,11 +270,7 @@ describe('BibLookupTool', () => {
         ],
       }
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify(s2Response),
-      })
+      mockFetch.mockResolvedValueOnce(mockApiResponse(s2Response))
 
       const result = await tool.execute(
         { query: 'bibtex test', source: 'semanticscholar', limit: 5, format: 'bibtex' },
@@ -315,11 +296,7 @@ describe('BibLookupTool', () => {
   </entry>
 </feed>`
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => arxivXml,
-      })
+      mockFetch.mockResolvedValueOnce(mockApiResponse(arxivXml))
 
       const result = await tool.execute(
         { query: 'testing methodologies', source: 'arxiv', limit: 5, format: 'summary' },
@@ -341,21 +318,17 @@ describe('BibLookupTool', () => {
       // First attempt: AbortError, second attempt: success
       mockFetch
         .mockRejectedValueOnce(abortError)
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          text: async () => JSON.stringify({
-            data: [{
-              title: 'After Retry',
-              authors: [{ name: 'Retry Author' }],
-              year: 2024,
-              venue: 'RetryConf',
-              citationCount: 1,
-              externalIds: { DOI: '10.1234/retry' },
-              abstract: '',
-            }],
-          }),
-        })
+        .mockResolvedValueOnce(mockApiResponse({
+          data: [{
+            title: 'After Retry',
+            authors: [{ name: 'Retry Author' }],
+            year: 2024,
+            venue: 'RetryConf',
+            citationCount: 1,
+            externalIds: { DOI: '10.1234/retry' },
+            abstract: '',
+          }],
+        }))
 
       const result = await tool.execute(
         { query: 'retry test', source: 'semanticscholar', limit: 1, format: 'summary' },
@@ -378,11 +351,7 @@ describe('BibLookupTool', () => {
         externalIds: { DOI: '10.1234/url.test' },
       }
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify(s2Response),
-      })
+      mockFetch.mockResolvedValueOnce(mockApiResponse(s2Response))
 
       const result = await tool.execute(
         { query: 'https://doi.org/10.1234/url.test', source: 'auto', limit: 5, format: 'summary' },

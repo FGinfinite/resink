@@ -3,8 +3,8 @@ body {
   --ide-rail-color: var(--content-primary-themed);
   --ide-rail-link-hover-color: var(--content-primary-themed);
   --ide-rail-link-background: var(--bg-primary-themed);
-  --ide-rail-link-hover-background: var(--bg-tertiary-themed);
-  --ide-rail-border-colour: rgb(255 255 255 / 6%);
+  --ide-rail-link-hover-background: var(--bg-secondary-themed);
+  --ide-rail-border-colour: var(--border-divider-themed);
   --ide-rail-header-subdued-button-color: var(--content-primary-themed);
   --ide-rail-header-subdued-button-hover-background: var(--bg-tertiary-themed);
   --ide-rail-link-active-color: var(--green-10);
@@ -12,7 +12,6 @@ body {
 }
 
 @include theme('light') {
-  --ide-rail-border-colour: var(--border-divider-themed);
   --ide-rail-link-active-color: var(--green-70);
   --ide-rail-link-active-background: var(--bg-accent-03);
 }

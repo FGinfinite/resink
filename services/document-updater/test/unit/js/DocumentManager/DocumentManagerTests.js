@@ -585,6 +585,48 @@ describe('DocumentManager', function () {
         })
       })
 
+      describe('with an expected version', function () {
+        describe('when it matches the current version', function () {
+          beforeEach(async function () {
+            await this.DocumentManager.promises.setDoc(
+              this.project_id,
+              this.doc_id,
+              this.afterLines,
+              this.source,
+              this.user_id,
+              false,
+              true,
+              this.version
+            )
+          })
+
+          it('should apply the update', function () {
+            this.UpdateManager.promises.applyUpdate.called.should.equal(true)
+          })
+        })
+
+        describe('when it does not match the current version', function () {
+          beforeEach(async function () {
+            await expect(
+              this.DocumentManager.promises.setDoc(
+                this.project_id,
+                this.doc_id,
+                this.afterLines,
+                this.source,
+                this.user_id,
+                false,
+                true,
+                this.version - 1
+              )
+            ).to.be.rejectedWith(Errors.VersionMismatchError)
+          })
+
+          it('should not apply the update', function () {
+            this.UpdateManager.promises.applyUpdate.called.should.equal(false)
+          })
+        })
+      })
+
       describe('when not already loaded', function () {
         beforeEach(async function () {
           this.DocumentManager.promises.getDoc = sinon.stub().resolves({

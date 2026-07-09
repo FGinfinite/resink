@@ -30,13 +30,58 @@ function compile(projectId, data) {
   })
 }
 
-async function convertDocx(path) {
+async function convertDocument(path, type) {
   const formData = new FormData()
   formData.append('qqfile', fs.createReadStream(path))
-  return await fetchStream(`${host}/convert/docx-to-latex`, {
+  try {
+    const stream = await fetchStream(
+      `${host}/convert/document-to-latex?type=${type}`,
+      {
+        method: 'POST',
+        body: formData,
+      }
+    )
+    return { status: 200, stream, body: null }
+  } catch (err) {
+    if (!err.response) throw err
+    let body = err.body
+    const contentType = err.response.headers.get?.('content-type') ?? ''
+    if (contentType.includes('application/json')) {
+      body = JSON.parse(body)
+    }
+    return { status: err.response.status, stream: null, body }
+  }
+}
+
+async function convertPdfToJpeg(path, mode) {
+  const formData = new FormData()
+  formData.append('qqfile', await fsPromises.readFile(path), 'input.pdf')
+  return await fetch(`${host}/convert/pdf-to-jpeg?mode=${mode}`, {
     method: 'POST',
-    body: formData,
+    headers: formData.getHeaders(),
+    body: formData.getBuffer(),
   })
+}
+
+async function convertProjectToDocument(
+  projectId,
+  userId,
+  type,
+  request,
+  responseFormat
+) {
+  const url = new URL(
+    `${host}/project/${projectId}/user/${userId}/download/project-to-document`
+  )
+  url.searchParams.set('type', type)
+  if (responseFormat) {
+    url.searchParams.set('responseFormat', responseFormat)
+  }
+  const opts = { method: 'POST', json: { compile: request } }
+  if (responseFormat === 'json') {
+    return await fetchJson(url.href, opts)
+  }
+  return await fetchStream(url.href, opts)
 }
 
 async function stopCompile(projectId) {
@@ -202,7 +247,9 @@ function smokeTest() {
 export default {
   randomId,
   compile,
-  convertDocx,
+  convertProjectToDocument,
+  convertDocument,
+  convertPdfToJpeg,
   stopCompile,
   clearCache,
   getOutputFile,

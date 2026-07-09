@@ -16,5 +16,4 @@ export type RailElement = {
   mountOnFirstLoad?: boolean
   ref?: React.RefObject<HTMLButtonElement>
   tab?: typeof RailTab
-  separated?: boolean
 }

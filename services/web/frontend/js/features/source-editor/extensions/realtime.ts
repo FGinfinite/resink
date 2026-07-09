@@ -123,14 +123,13 @@ export class EditorFacade extends EventEmitter {
 
   // Dispatch changes to CodeMirror view
   cmChange(changes: ChangeSpec, origin?: string) {
-    const isRemote = origin === 'remote' || origin === 'ai-agent'
-    const isAIChange = origin === 'ai-agent'
+    const isRemote = origin === 'remote'
 
     this.view.dispatch({
       changes,
       annotations: [
         Transaction.remote.of(isRemote),
-        Transaction.addToHistory.of(!isRemote || isAIChange),
+        Transaction.addToHistory.of(!isRemote),
       ],
       effects:
         // if this is a remote change, restore a snapshot of the current scroll position after the change has been applied
@@ -196,8 +195,6 @@ class ShareLatexOTAdapter {
   // the 'attach_ace' helper)
   attachShareJs() {
     const shareDoc = this.shareDoc
-    let lastRemoteMeta: Record<string, any> | null = null
-
     const check = () => {
       // run in a timeout so it checks the editor content once this update has been applied
       window.setTimeout(() => {
@@ -213,39 +210,22 @@ class ShareLatexOTAdapter {
       }, 0)
     }
 
-    // Capture metadata from the 'change' event which fires BEFORE
-    // 'remoteop' and its 'insert'/'delete' sub-events.
-    const onChange = (
-      _docOp: any,
-      _oldSnapshot: any,
-      msg: any,
-      isRemote: boolean
-    ) => {
-      lastRemoteMeta = isRemote ? (msg?.meta ?? null) : null
-    }
-
     const onInsert = (pos: number, text: string) => {
-      const origin =
-        lastRemoteMeta?.origin?.kind === 'ai-agent' ? 'ai-agent' : 'remote'
-      this.editor.cmInsert(pos, text, origin)
+      this.editor.cmInsert(pos, text, 'remote')
       check()
     }
 
     const onDelete = (pos: number, text: string) => {
-      const origin =
-        lastRemoteMeta?.origin?.kind === 'ai-agent' ? 'ai-agent' : 'remote'
-      this.editor.cmDelete(pos, text, origin)
+      this.editor.cmDelete(pos, text, 'remote')
       check()
     }
 
     check()
 
-    shareDoc.on('change', onChange)
     shareDoc.on('insert', onInsert)
     shareDoc.on('delete', onDelete)
 
     shareDoc.detach_cm6 = () => {
-      shareDoc.removeListener('change', onChange)
       shareDoc.removeListener('insert', onInsert)
       shareDoc.removeListener('delete', onDelete)
       delete shareDoc.detach_cm6
@@ -370,12 +350,7 @@ class HistoryOTAdapter {
     }
   }
 
-  onRemoteOp(
-    operations: EditOperation[],
-    _oldSnapshot?: unknown,
-    msg?: Record<string, any>
-  ) {
-    const isAIChange = msg?.meta?.origin?.kind === 'ai-agent'
+  onRemoteOp(operations: EditOperation[]) {
     const trackedDeletes = trackedDeletesFromState(this.editor.view.state)
     const changes: ChangeSpec[] = []
     let trackedChangesUpdated = false
@@ -430,7 +405,7 @@ class HistoryOTAdapter {
         effects,
         annotations: [
           Transaction.remote.of(true),
-          Transaction.addToHistory.of(isAIChange),
+          Transaction.addToHistory.of(false),
         ],
       })
     }

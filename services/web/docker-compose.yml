@@ -3,13 +3,17 @@ volumes:
 
 services:
   test_unit:
-    image: node:24.14.1
+    build:
+      context: ../..
+      dockerfile: services/web/Dockerfile
+      target: base
     volumes:
       - .:/overleaf/services/web
       - ../../node_modules:/overleaf/node_modules
       - ../../libraries:/overleaf/libraries
       - ../../bin/shared/wait_for_it:/overleaf/bin/shared/wait_for_it
       - ../../tools/migrations:/overleaf/tools/migrations
+      - ../../tsconfig.backend.json:/overleaf/tsconfig.backend.json
       - ../../package.json:/overleaf/package.json
       - ../../.yarnrc.yml:/overleaf/.yarnrc.yml
       - ../../yarn.lock:/overleaf/yarn.lock
@@ -29,7 +33,7 @@ services:
       NODE_OPTIONS: "--unhandled-rejections=strict"
       REDIS_HOST: redis_test
       MONOREPO:
-    entrypoint: /overleaf/bin/shared/wait_for_it mongo:27017 --timeout=60 -- corepack
+    entrypoint: /overleaf/bin/shared/wait_for_it mongo:27017 --timeout=60 --
     command: yarn run --silent test:unit:app
     user: node
     depends_on:
@@ -37,7 +41,10 @@ services:
       - redis_test
 
   test_acceptance:
-    image: node:24.14.1
+    build:
+      context: ../..
+      dockerfile: services/web/Dockerfile
+      target: base
     volumes:
       - .:/overleaf/services/web
       - ../../node_modules:/overleaf/node_modules
@@ -74,7 +81,7 @@ services:
       - mongo
       - saml
       - ldap
-    entrypoint: /overleaf/bin/shared/wait_for_it mongo:27017 --timeout=60 -- corepack
+    entrypoint: /overleaf/bin/shared/wait_for_it mongo:27017 --timeout=60 --
     command: yarn run --silent test:acceptance:app
 
   test_frontend_jsdom:
@@ -97,7 +104,6 @@ services:
       MOCHA_GREP: ${MOCHA_GREP}
       NODE_OPTIONS: "--unhandled-rejections=strict"
       VERBOSE_LOGGING:
-    entrypoint: corepack
     command: yarn run --silent test:frontend
     user: node
 
@@ -108,7 +114,13 @@ services:
         - USER_UID
         - USER_GID
     volumes:
-      - ../../:/overleaf
+      - .:/overleaf/services/web
+      - ../../node_modules:/overleaf/node_modules
+      - ../../libraries:/overleaf/libraries
+      - ../../package.json:/overleaf/package.json
+      - ../../.yarnrc.yml:/overleaf/.yarnrc.yml
+      - ../../yarn.lock:/overleaf/yarn.lock
+      - ../../.yarn:/overleaf/.yarn
     working_dir: /overleaf/services/web
     environment:
       VERBOSE_LOGGING:
@@ -140,7 +152,6 @@ services:
       JUNIT_ROOT_SUITE_NAME:
       NODE_OPTIONS: "--unhandled-rejections=strict"
       VERBOSE_LOGGING:
-    entrypoint: corepack
     command: yarn run --silent test:writefull
     user: node
 

@@ -24,6 +24,7 @@ import HistoryManager from '../History/HistoryManager.mjs'
 import SplitTestHandler from '../SplitTests/SplitTestHandler.mjs'
 import AnalyticsManager from '../Analytics/AnalyticsManager.mjs'
 import RedisWrapper from '../../infrastructure/RedisWrapper.mjs'
+import { getOutputFileURL } from './ClsiURLHelpers.mjs'
 
 // use the redis db with eviction policy enabled
 const rclient = RedisWrapper.client('clsi_cookie')
@@ -35,7 +36,7 @@ const NewBackendCloudClsiCookieManager = ClsiCookieManagerFactory(
   Settings.apis.clsi_new?.backendGroupName
 )
 
-const VALID_COMPILERS = ['pdflatex', 'latex', 'xelatex', 'lualatex']
+const VALID_COMPILERS = Settings.safeCompilers
 const OUTPUT_FILE_TIMEOUT_MS = 60000
 const CLSI_COOKIES_ENABLED = (Settings.clsiCookie?.key ?? '') !== ''
 
@@ -81,23 +82,23 @@ async function clearBaseHistoryVersion(projectId, userId) {
   await rclient.del(_baseHistoryVersionKey(projectId, userId))
 }
 
-function getNewCompileBackendClass(projectId, compileBackendClass) {
-  // Sample x% of projects to move up one bracket.
-  if (
-    SplitTestHandler.getPercentile(projectId, 'double-compile', 'release') >=
-    Settings.apis.clsi_new.sample
-  ) {
-    return null
-  }
+function getDoubleCompilePercentile(projectId) {
+  return SplitTestHandler.getPercentile(projectId, 'double-compile', 'release')
+}
 
-  switch (compileBackendClass) {
-    case 'c3d':
-      return 'n4'
-    case 'c4d':
-      return 'n4'
-    default:
-      throw new Error('unknown ?compileBackendClass')
+function getNewCompileBackendClass(projectId, compileBackendClass) {
+  const clsi = Settings.apis.clsi
+  let cfg
+  if (compileBackendClass === clsi.standardCompileBackendClass) {
+    cfg = Settings.apis.clsi_new.doubleCompileFree
+  } else if (compileBackendClass === clsi.priorityCompileBackendClass) {
+    cfg = Settings.apis.clsi_new.doubleCompilePremium
+  } else {
+    throw new Error('unknown ?compileBackendClass')
   }
+  if (!cfg.backendClass || !cfg.sample) return null
+  if (getDoubleCompilePercentile(projectId) >= cfg.sample) return null
+  return cfg.backendClass
 }
 
 /**
@@ -149,25 +150,22 @@ function collectMetricsOnBlgFiles(outputFiles) {
   Metrics.count('blg_output_file', nested, 1, { path: 'nested' })
 }
 
-async function sendRequest(projectId, userId, options) {
-  if (options == null) {
-    options = {}
-  }
-  let result = await sendRequestOnce(projectId, userId, options)
+async function sendRequest(project, projectId, userId, options) {
+  let result = await sendRequestOnce(project, projectId, userId, options)
   if (result.status === 'missing-updates') {
     // try again with updated baseline
-    result = await sendRequestOnce(projectId, userId, {
+    result = await sendRequestOnce(project, projectId, userId, {
       ...options,
       baseHistoryVersion: result.baseHistoryVersion,
     })
   } else if (result.status === 'conflict') {
     // Try again, with a full compile
-    result = await sendRequestOnce(projectId, userId, {
+    result = await sendRequestOnce(null, projectId, userId, {
       ...options,
       syncType: 'full',
     })
   } else if (result.status === 'unavailable') {
-    result = await sendRequestOnce(projectId, userId, {
+    result = await sendRequestOnce(null, projectId, userId, {
       ...options,
       syncType: 'full',
       forceNewClsiServer: true,
@@ -176,10 +174,10 @@ async function sendRequest(projectId, userId, options) {
   return result
 }
 
-async function sendRequestOnce(projectId, userId, options) {
+async function sendRequestOnce(project, projectId, userId, options) {
   let req
   try {
-    req = await _buildRequest(projectId, userId, options)
+    req = await _buildRequest(project, projectId, userId, options)
   } catch (err) {
     if (err.message === 'no main file specified') {
       return {
@@ -331,6 +329,7 @@ async function _sendBuiltRequest(projectId, userId, req, options) {
     outputUrlPrefix: compile.outputUrlPrefix,
     clsiCacheShard: compile.clsiCacheShard,
     baseHistoryVersion: compile.baseHistoryVersion,
+    instanceType: compile.instanceType,
   }
 }
 
@@ -441,7 +440,7 @@ async function _makeRequest(
   timer.done()
   let newClsiServerId
   if (CLSI_COOKIES_ENABLED) {
-    newClsiServerId = _getClsiServerIdFromResponse(response)
+    newClsiServerId = getClsiServerIdFromResponse(response)
     await ClsiCookieManager.promises.setServerId(
       projectId,
       userId,
@@ -600,7 +599,7 @@ async function _makeNewBackendRequest(
   timer.done()
   let newClsiServerId
   if (CLSI_COOKIES_ENABLED) {
-    newClsiServerId = _getClsiServerIdFromResponse(response)
+    newClsiServerId = getClsiServerIdFromResponse(response)
     await NewBackendCloudClsiCookieManager.promises.setServerId(
       projectId,
       userId,
@@ -614,7 +613,7 @@ async function _makeNewBackendRequest(
     response,
     body: json,
     newCompileBackendClass,
-    newClsiServerId: clsiServerId || newClsiServerId,
+    newClsiServerId: newClsiServerId || clsiServerId,
   }
 }
 
@@ -733,18 +732,20 @@ function _parseOutputFiles(projectId, rawOutputFiles = []) {
   return outputFiles
 }
 
-async function _buildRequest(projectId, userId, options) {
-  const project = await ProjectGetter.promises.getProject(projectId, {
-    compiler: 1,
-    imageName: 1,
-    'overleaf.history.id': 1,
-    ...(options.compileFromHistory ? {} : { rootDoc_id: 1, rootFolder: 1 }),
-  })
+async function _buildRequest(project, projectId, userId, options) {
+  if (project === null) {
+    project = await ProjectGetter.promises.getProject(projectId, {
+      compiler: 1,
+      imageName: 1,
+      'overleaf.history.id': 1,
+      ...(options.compileFromHistory ? {} : { rootDoc_id: 1, rootFolder: 1 }),
+    })
+  }
   if (project == null) {
     throw new Errors.NotFoundError(`project does not exist: ${projectId}`)
   }
   if (!VALID_COMPILERS.includes(project.compiler)) {
-    project.compiler = 'pdflatex'
+    project.compiler = Settings.defaultLatexCompiler
   }
   const historyId = project.overleaf.history.id
   let { baseHistoryVersion } = options
@@ -768,7 +769,7 @@ async function _buildRequest(projectId, userId, options) {
         'failed to compose history-full request'
       )
       // fall back to old compile mode
-      return await _buildRequest(projectId, userId, {
+      return await _buildRequest(null, projectId, userId, {
         ...options,
         compileFromHistory: false,
       })
@@ -789,7 +790,7 @@ async function _buildRequest(projectId, userId, options) {
         'failed to compose history-incremental request'
       )
       // fall back to old compile mode
-      return await _buildRequest(projectId, userId, {
+      return await _buildRequest(null, projectId, userId, {
         ...options,
         compileFromHistory: false,
       })
@@ -850,17 +851,17 @@ async function getContentFromDocUpdaterIfMatch(projectId, project, options) {
 async function getOutputFileStream(
   projectId,
   userId,
-  options,
   clsiServerId,
   buildId,
   outputFilePath
 ) {
-  const { compileBackendClass, compileGroup } = options
-  const url = new URL(Settings.apis.clsi.downloadHost)
-  url.pathname = `/project/${projectId}/user/${userId}/build/${buildId}/output/${outputFilePath}`
-  url.searchParams.set('compileBackendClass', compileBackendClass)
-  url.searchParams.set('compileGroup', compileGroup)
-  url.searchParams.set('clsiserverid', clsiServerId)
+  const url = getOutputFileURL(
+    projectId,
+    userId,
+    buildId,
+    outputFilePath,
+    clsiServerId
+  )
   try {
     const stream = await fetchStream(url, {
       signal: AbortSignal.timeout(OUTPUT_FILE_TIMEOUT_MS),
@@ -1157,6 +1158,7 @@ function _finaliseRequest(projectId, options, project, docs, files) {
         enablePdfCaching:
           (Settings.enablePdfCaching && options.enablePdfCaching) || false,
         pdfCachingMinChunkSize: options.pdfCachingMinChunkSize,
+        enableCheckpoint: Boolean(options.enableCheckpoint),
         flags,
         metricsMethod: options.compileGroup,
         metricsPath: options.metricsPath,
@@ -1171,24 +1173,19 @@ function _finaliseRequest(projectId, options, project, docs, files) {
   }
 }
 
-async function buildDocumentConversionRequest(projectId) {
-  const project = await ProjectGetter.promises.getProject(projectId, {
-    compiler: 1,
-    imageName: 1,
-    'overleaf.history.id': 1,
-    rootDoc_id: 1,
-    rootFolder: 1,
+async function buildDocumentConversionRequest(projectId, userId, options) {
+  return await _buildRequest(null, projectId, userId, {
+    ...options,
+    // Use the history snapshot as populated on clsi-cache.
+    populateClsiCache: true,
+    // Read from mongo directly, skip redis.
+    incrementalCompilesEnabled: false,
   })
-  if (project == null) {
-    throw new Errors.NotFoundError(`project does not exist: ${projectId}`)
-  }
-  const projectStateHash = ClsiStateManager.computeHash(project, {})
-  return _buildRequestFromMongo(projectId, {}, project, projectStateHash)
 }
 
 async function wordCount(projectId, userId, file, limits, clsiserverid) {
   const { compileBackendClass, compileGroup } = limits
-  const req = await _buildRequest(projectId, userId, limits)
+  const req = await _buildRequest(null, projectId, userId, limits)
   const filename = file || req.compile.rootResourcePath
   const url = _getCompilerUrl(
     compileBackendClass,
@@ -1265,7 +1262,7 @@ async function syncTeX(
   }
 }
 
-function _getClsiServerIdFromResponse(response) {
+function getClsiServerIdFromResponse(response) {
   const setCookieHeaders = response.headers.raw()['set-cookie'] ?? []
   for (const header of setCookieHeaders) {
     const cookie = Cookie.parse(header)
@@ -1289,6 +1286,7 @@ export default {
     'outputUrlPrefix',
     'buildId',
     'clsiCacheShard',
+    'instanceType',
   ]),
   sendExternalRequest: callbackifyMultiResult(sendExternalRequest, [
     'status',
@@ -1304,6 +1302,8 @@ export default {
   getOutputFileStream: callbackify(getOutputFileStream),
   wordCount: callbackify(wordCount),
   syncTeX: callbackify(syncTeX),
+  getClsiServerIdFromResponse,
+  CLSI_COOKIES_ENABLED,
   promises: {
     sendRequest,
     sendExternalRequest,

@@ -3,10 +3,6 @@
 
   @include shadow-md;
 
-  &.show {
-    animation: tooltip-fade-in var(--transition-fast) var(--ease-decelerate);
-  }
-
   &.#{$prefix}tooltip-top {
     bottom: -1px !important;
   }
@@ -35,14 +31,5 @@
 
   .tooltip-wide & {
     max-width: unset;
-  }
-}
-
-@keyframes tooltip-fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
   }
 }

@@ -121,10 +121,10 @@ const autocompleteTheme = EditorView.baseTheme({
     },
   '&dark .cm-tooltip.cm-tooltip-autocomplete, &dark .cm-tooltip.cm-completionInfo':
     {
-      border: '1px var(--border-dark, #484747) solid',
+      border: '1px #484747 solid',
       boxShadow: '2px 3px 5px rgba(0, 0, 0, 0.51)',
-      background: 'var(--bg-dark-elevated, #25282c)',
-      color: 'var(--text-dark-secondary, #c1c1c1)',
+      background: '#25282c',
+      color: '#c1c1c1',
     },
 
   // match editor font family and font size, so the completion aligns with the text
@@ -154,8 +154,8 @@ const autocompleteTheme = EditorView.baseTheme({
     backgroundColor: 'rgba(233, 233, 253, 0.4)',
   },
   '&dark .cm-tooltip.cm-tooltip-autocomplete li[role="option"]:hover': {
-    outlineColor: 'color-mix(in srgb, var(--text-dark-accent, #6d960d) 80%, transparent)',
-    backgroundColor: 'color-mix(in srgb, var(--bg-dark-tertiary, #3a674e) 62%, transparent)',
+    outlineColor: 'rgba(109, 150, 13, 0.8)',
+    backgroundColor: 'rgba(58, 103, 78, 0.62)',
   },
   '.cm-tooltip.cm-tooltip-autocomplete ul li[aria-selected]': {
     color: 'inherit',
@@ -164,7 +164,7 @@ const autocompleteTheme = EditorView.baseTheme({
     background: '#cad6fa',
   },
   '&dark .cm-tooltip.cm-tooltip-autocomplete ul li[aria-selected]': {
-    background: 'var(--bg-dark-tertiary, #3a674e)',
+    background: '#3a674e',
   },
   '.cm-completionMatchedText': {
     textDecoration: 'none', // remove default underline,
@@ -173,7 +173,7 @@ const autocompleteTheme = EditorView.baseTheme({
     color: '#2d69c7',
   },
   '&dark .cm-completionMatchedText': {
-    color: 'var(--text-dark-accent, #93ca12)',
+    color: '#93ca12',
   },
   '.ol-cm-completionType': {
     paddingLeft: '1em',

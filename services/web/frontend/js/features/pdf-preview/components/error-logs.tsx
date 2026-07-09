@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import { ElementType, memo, useCallback, useMemo, useState } from 'react'
+import { memo, useCallback, useMemo, useState } from 'react'
 import { usePdfPreviewContext } from '@/features/pdf-preview/components/pdf-preview-provider'
 import StopOnFirstErrorPrompt from '@/features/pdf-preview/components/stop-on-first-error-prompt'
 import PdfPreviewError from '@/features/pdf-preview/components/pdf-preview-error'
@@ -16,14 +16,7 @@ import getMeta from '@/utils/meta'
 import PdfClearCacheButton from '@/features/pdf-preview/components/pdf-clear-cache-button'
 import PdfDownloadFilesButton from '@/features/pdf-preview/components/pdf-download-files-button'
 import RollingBuildSelectedReminder from './rolling-build-selected-reminder'
-import AiPaywallNotification from '@/shared/components/ai-paywall-notification'
-import importOverleafModules from '../../../../macros/import-overleaf-module.macro'
-
-// todo: quota clean-up remove unneeded old paywall component
-const logsComponents: Array<{
-  import: { default: ElementType }
-  path: string
-}> = importOverleafModules('errorLogsComponents')
+import ErrorAssistantAiPaywallNotification from './error-assistant-ai-paywall-notification'
 
 type ErrorLogTab = {
   key: string
@@ -81,10 +74,7 @@ function ErrorLogs({
           <TabHeader key={tab.key} tab={tab} active={activeTab === tab.key} />
         ))}
       </Nav>
-      {logsComponents.map(({ import: { default: Component }, path }) => (
-        <Component key={path} />
-      ))}
-      <AiPaywallNotification featureLocation="errorAssist" />
+      <ErrorAssistantAiPaywallNotification />
       <TabContent className="error-logs new-error-logs">
         <div className="logs-pane-content">
           <RollingBuildSelectedReminder />
@@ -162,6 +152,7 @@ const TabHeader = ({ tab, active }: { tab: ErrorLogTab; active: boolean }) => {
       eventKey={tab.key}
       className="error-logs-tab-header"
       active={active}
+      as="button"
     >
       {tab.label}
       <div className="error-logs-tab-count">

@@ -228,6 +228,7 @@ export default function MentionsPlugin({
           <div
             className={`ai-typeahead-popover${!editorFocused ? ' ai-typeahead-popover--hidden' : ''}`}
             onMouseDown={e => e.preventDefault()}
+            role="presentation"
           >
             <div className="ai-typeahead-list">
               {menuOptions.map((option, index) => (

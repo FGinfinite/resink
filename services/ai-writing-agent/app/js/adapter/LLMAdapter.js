@@ -199,7 +199,7 @@ export class LLMAdapter {
         let stallTimer
         const { done, value } = await Promise.race([
           reader.read(),
-          new Promise((_, reject) => {
+          new Promise((_resolve, reject) => {
             stallTimer = setTimeout(
               () => reject(new LLMTimeoutError('Stream stalled — no data received', { timeout: stallTimeoutMs })),
               stallTimeoutMs
@@ -444,8 +444,14 @@ export class LLMAdapter {
         throw new LLMTimeoutError('LLM request timed out', { timeout: this.timeout })
       }
 
-      // Don't retry or wrap non-retryable errors
-      if (error instanceof LLMContextOverflowError || error instanceof LLMAuthError) {
+      // Don't retry or wrap already-classified errors.
+      if (
+        error instanceof LLMContextOverflowError ||
+        error instanceof LLMAuthError ||
+        error instanceof LLMRateLimitError ||
+        error instanceof LLMTimeoutError ||
+        error instanceof LLMBufferOverflowError
+      ) {
         throw error
       }
 

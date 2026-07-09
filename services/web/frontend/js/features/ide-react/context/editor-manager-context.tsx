@@ -245,19 +245,13 @@ export const EditorManagerProvider: FC<React.PropsWithChildren> = ({
         ) {
           return
         }
-        if (
-          update.meta.origin?.kind === 'ai-agent' &&
-          update.meta.user_id === userId
-        ) {
-          return
-        }
         showGenericMessageModal(
           t('document_updated_externally'),
           t('document_updated_externally_detail')
         )
       })
     },
-    [attachErrorHandlerToDocument, showGenericMessageModal, t, userId]
+    [attachErrorHandlerToDocument, showGenericMessageModal, t]
   )
 
   const syncTimeoutRef = useRef<number | null>(null)

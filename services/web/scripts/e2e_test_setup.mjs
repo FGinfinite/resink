@@ -11,6 +11,7 @@ import UserDeleter from '../app/src/Features/User/UserDeleter.mjs'
 import UserRegistrationHandler from '../app/src/Features/User/UserRegistrationHandler.mjs'
 import HistoryManager from '../app/src/Features/History/HistoryManager.mjs'
 import ProjectCreationHandler from '../app/src/Features/Project/ProjectCreationHandler.mjs'
+import crypto from 'node:crypto'
 
 const MONOREPO = Path.dirname(
   Path.dirname(Path.dirname(Path.dirname(fileURLToPath(import.meta.url))))
@@ -24,6 +25,7 @@ async function createUser(email) {
   const user = await UserRegistrationHandler.promises.registerNewUser({
     email,
     password: process.env.CYPRESS_DEFAULT_PASSWORD,
+    analyticsId: crypto.randomUUID(),
   })
   const features = email.startsWith('free+')
     ? Settings.defaultFeatures
@@ -163,6 +165,26 @@ export async function provisionSplitTests(merge = false, extraSplitTests = []) {
       'utf-8'
     )
   )
+  // Add WIP split test, we can update the JSON blob once this is in production
+  SPLIT_TESTS.push({
+    name: 'zip-from-history',
+    versions: [
+      {
+        versionNumber: 1,
+        createdAt: '2026-02-25T14:55:31.260Z',
+        active: true,
+        analyticsEnabled: false,
+        phase: 'release',
+        variants: [
+          {
+            name: 'enabled',
+            rolloutPercent: 0,
+            rolloutStripes: [],
+          },
+        ],
+      },
+    ],
+  })
   console.log(`> Importing ${SPLIT_TESTS.length} split-tests from production.`)
   if (merge) {
     await SplitTestManager.mergeSplitTests(SPLIT_TESTS, false)

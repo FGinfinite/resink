@@ -9,25 +9,33 @@ import ProjectNotificationsSetting from '@/features/settings/components/editor-s
 const preferencesUrl = `/notifications/preferences/project/${PROJECT_ID}`
 
 const allNotificationsOn = {
-  trackedChangesOnOwnProject: true,
-  trackedChangesOnInvitedProject: true,
   commentOnOwnProject: true,
   commentOnInvitedProject: true,
-  repliesOnOwnProject: true,
-  repliesOnInvitedProject: true,
   repliesOnAuthoredThread: true,
   repliesOnParticipatingThread: true,
+  commentResolvedOnAuthoredThread: true,
+  commentResolvedOnParticipatingThread: true,
+  commentReopenedOnAuthoredThread: true,
+  commentReopenedOnParticipatingThread: true,
+  trackedChangesOnOwnProject: true,
+  trackedChangesOnInvitedProject: true,
+  trackChangesAcceptedOnAuthoredChange: true,
+  trackChangesRejectedOnAuthoredChange: true,
 }
 
 const repliesOnlyPreferences = {
-  trackedChangesOnOwnProject: false,
-  trackedChangesOnInvitedProject: false,
   commentOnOwnProject: false,
   commentOnInvitedProject: false,
-  repliesOnOwnProject: false,
-  repliesOnInvitedProject: false,
   repliesOnAuthoredThread: true,
   repliesOnParticipatingThread: true,
+  commentResolvedOnAuthoredThread: true,
+  commentResolvedOnParticipatingThread: true,
+  commentReopenedOnAuthoredThread: true,
+  commentReopenedOnParticipatingThread: true,
+  trackedChangesOnOwnProject: false,
+  trackedChangesOnInvitedProject: false,
+  trackChangesAcceptedOnAuthoredChange: true,
+  trackChangesRejectedOnAuthoredChange: true,
 }
 
 const globallyMutedPreferences = {
@@ -35,27 +43,50 @@ const globallyMutedPreferences = {
   trackedChangesOnInvitedProject: false,
   commentOnOwnProject: false,
   commentOnInvitedProject: false,
-  repliesOnOwnProject: false,
-  repliesOnInvitedProject: false,
   repliesOnAuthoredThread: false,
   repliesOnParticipatingThread: false,
   muteAllNotifications: true,
+  commentResolvedOnAuthoredThread: false,
+  commentResolvedOnParticipatingThread: false,
+  commentReopenedOnAuthoredThread: false,
+  commentReopenedOnParticipatingThread: false,
+  trackChangesAcceptedOnAuthoredChange: false,
+  trackChangesRejectedOnAuthoredChange: false,
 }
 
 const allNotificationsOff = {
-  trackedChangesOnOwnProject: false,
-  trackedChangesOnInvitedProject: false,
   commentOnOwnProject: false,
   commentOnInvitedProject: false,
-  repliesOnOwnProject: false,
-  repliesOnInvitedProject: false,
   repliesOnAuthoredThread: false,
   repliesOnParticipatingThread: false,
+  commentResolvedOnAuthoredThread: false,
+  commentResolvedOnParticipatingThread: false,
+  commentReopenedOnAuthoredThread: false,
+  commentReopenedOnParticipatingThread: false,
+  trackedChangesOnOwnProject: false,
+  trackedChangesOnInvitedProject: false,
+  trackChangesAcceptedOnAuthoredChange: false,
+  trackChangesRejectedOnAuthoredChange: false,
 }
 
-function renderComponent() {
+const defaultPreferences = {
+  trackedChangesOnOwnProject: true,
+  trackedChangesOnInvitedProject: false,
+  commentOnOwnProject: true,
+  commentOnInvitedProject: false,
+  repliesOnAuthoredThread: true,
+  repliesOnParticipatingThread: true,
+  muteAllNotifications: false,
+  commentResolvedOnAuthoredThread: true,
+  commentResolvedOnParticipatingThread: true,
+  commentReopenedOnAuthoredThread: true,
+  commentReopenedOnParticipatingThread: true,
+  trackChangesAcceptedOnAuthoredChange: true,
+}
+
+function renderComponent(props: { permissionsLevel?: string } = {}) {
   return render(
-    <EditorProviders>
+    <EditorProviders permissionsLevel={props.permissionsLevel as any}>
       <SettingsModalProvider>
         <ProjectNotificationsSetting />
       </SettingsModalProvider>
@@ -239,6 +270,40 @@ describe('<ProjectNotificationsSetting />', function () {
         body: allNotificationsOff,
       })
     ).to.be.true
+  })
+
+  it('shows "all" for owner with default preferences', async function () {
+    fetchMock.get(preferencesUrl, defaultPreferences)
+
+    renderComponent({ permissionsLevel: 'owner' })
+
+    await waitFor(
+      () =>
+        expect(
+          (
+            screen.getByLabelText('All project activity', {
+              exact: false,
+            }) as HTMLInputElement
+          ).checked
+        ).to.be.true
+    )
+  })
+
+  it('shows "replies" for invitee with default preferences', async function () {
+    fetchMock.get(preferencesUrl, defaultPreferences)
+
+    renderComponent({ permissionsLevel: 'readAndWrite' })
+
+    await waitFor(
+      () =>
+        expect(
+          (
+            screen.getByLabelText('Replies to your activity only', {
+              exact: false,
+            }) as HTMLInputElement
+          ).checked
+        ).to.be.true
+    )
   })
 
   it('POSTs "all" preferences when "All project activity" is selected', async function () {

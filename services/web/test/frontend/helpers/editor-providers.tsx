@@ -45,7 +45,7 @@ import {
   ProjectMetadata,
   ProjectUpdate,
 } from '@/shared/context/types/project-metadata'
-import { UserId } from '../../../types/user'
+import { User, UserId } from '../../../types/user'
 import { ProjectCompiler } from '../../../types/project-settings'
 import { ReferencesContext } from '@/features/ide-react/context/references-context'
 import { useEditorAnalytics } from '@/shared/hooks/use-editor-analytics'
@@ -71,7 +71,7 @@ const defaultUserSettings = {
 } satisfies UserSettings
 
 export type EditorProvidersProps = {
-  user?: { id: string; email: string; signUpDate?: string }
+  user?: Pick<User, 'id' | 'email'> & Partial<User>
   projectId?: string
   projectName?: string
   projectOwner?: ProjectMetadata['owner']
@@ -140,7 +140,7 @@ const layoutContextDefault = {
   chatIsOpen: true, // false in the application, true in tests
   reviewPanelOpen: false,
   miniReviewPanelVisible: false,
-  leftMenuShown: false,
+  settingsShown: false,
   projectSearchIsOpen: false,
   pdfLayout: 'sideBySide',
   loadingStyleSheet: false,
@@ -274,19 +274,23 @@ export function makeEditorProvider({
   cobranding = undefined,
   renameProject = () => {},
   isRestrictedTokenMember,
+  hasSuggestionsLeft = false,
+  premiumSuggestionResetDate = new Date(),
 }: {
   isProjectOwner?: boolean
   cobranding?: Cobranding
   renameProject?: () => void
   isRestrictedTokenMember?: boolean
+  hasSuggestionsLeft?: boolean
+  premiumSuggestionResetDate?: Date
 } = {}) {
   const EditorProvider: FC<PropsWithChildren> = ({ children }) => {
     const value = {
       isProjectOwner,
       renameProject,
       isPendingEditor: false,
-      hasSuggestionsLeft: false,
-      premiumSuggestionResetDate: new Date(),
+      hasSuggestionsLeft,
+      premiumSuggestionResetDate,
       hasTokensLeft: false,
       tokensLeft: 0,
       setTokensLeft: () => {},
@@ -473,7 +477,7 @@ const makeLayoutProvider = (
     const [miniReviewPanelVisible, setMiniReviewPanelVisible] = useState(
       layout.miniReviewPanelVisible
     )
-    const [leftMenuShown, setLeftMenuShown] = useState(layout.leftMenuShown)
+    const [settingsShown, setSettingsShown] = useState(layout.settingsShown)
     const [projectSearchIsOpen, setProjectSearchIsOpen] = useState(
       layout.projectSearchIsOpen
     )
@@ -544,7 +548,7 @@ const makeLayoutProvider = (
         detachRole,
         changeLayout,
         chatIsOpen,
-        leftMenuShown,
+        settingsShown,
         openFile,
         pdfLayout,
         pdfPreviewOpen,
@@ -554,7 +558,7 @@ const makeLayoutProvider = (
         miniReviewPanelVisible,
         loadingStyleSheet,
         setChatIsOpen,
-        setLeftMenuShown,
+        setSettingsShown,
         setOpenFile,
         setPdfLayout,
         setReviewPanelOpen,
@@ -565,6 +569,8 @@ const makeLayoutProvider = (
         restoreView,
         handleChangeLayout,
         handleDetach,
+        focusMode: layout.focusMode ?? false,
+        setFocusMode: layout.setFocusMode ?? (() => {}),
       }),
       [
         reattach,
@@ -573,7 +579,7 @@ const makeLayoutProvider = (
         detachRole,
         changeLayout,
         chatIsOpen,
-        leftMenuShown,
+        settingsShown,
         openFile,
         pdfLayout,
         pdfPreviewOpen,
@@ -583,7 +589,7 @@ const makeLayoutProvider = (
         miniReviewPanelVisible,
         loadingStyleSheet,
         setChatIsOpen,
-        setLeftMenuShown,
+        setSettingsShown,
         setOpenFile,
         setPdfLayout,
         setReviewPanelOpen,

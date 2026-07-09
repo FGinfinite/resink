@@ -5,59 +5,14 @@
 // - parse JSON response body, unless response is empty
 import OError from '@overleaf/o-error'
 import getMeta from '@/utils/meta'
+import { getErrorMessageForStatusCode } from './http-status-messages'
 
 type FetchPath = string
 // Custom config types are merged with `fetch`s RequestInit type
 type FetchConfig = {
   swallowAbortError?: boolean
   body?: Record<string, unknown>
-  timeoutMs?: number
 } & Omit<RequestInit, 'body'>
-
-const DEFAULT_TIMEOUT_MS = 30_000
-
-function createAbortSignal(
-  timeoutMs: number | undefined,
-  externalSignal?: AbortSignal | null
-) {
-  if ((!timeoutMs || timeoutMs <= 0) && !externalSignal) {
-    return {
-      signal: undefined,
-      timedOut: () => false,
-      cleanup: () => {},
-    }
-  }
-
-  const controller = new AbortController()
-  let timedOut = false
-  let timeoutId: ReturnType<typeof setTimeout> | undefined
-
-  if (timeoutMs && timeoutMs > 0) {
-    timeoutId = setTimeout(() => {
-      timedOut = true
-      controller.abort()
-    }, timeoutMs)
-  }
-
-  let onAbort: (() => void) | undefined
-  if (externalSignal) {
-    if (externalSignal.aborted) {
-      controller.abort()
-    } else {
-      onAbort = () => controller.abort()
-      externalSignal.addEventListener('abort', onAbort)
-    }
-  }
-
-  const cleanup = () => {
-    if (timeoutId) clearTimeout(timeoutId)
-    if (externalSignal && onAbort) {
-      externalSignal.removeEventListener('abort', onAbort)
-    }
-  }
-
-  return { signal: controller.signal, timedOut: () => timedOut, cleanup }
-}
 
 export function getJSON<T = any>(path: FetchPath, options?: FetchConfig) {
   return fetchJSON<T>(path, { ...options, method: 'GET' })
@@ -73,25 +28,6 @@ export function putJSON<T = any>(path: FetchPath, options?: FetchConfig) {
 
 export function deleteJSON<T = any>(path: FetchPath, options?: FetchConfig) {
   return fetchJSON<T>(path, { ...options, method: 'DELETE' })
-}
-
-function getErrorMessageForStatusCode(statusCode?: number) {
-  if (!statusCode) {
-    return 'Unknown Error'
-  }
-
-  const statusCodes: { readonly [K: number]: string } = {
-    400: 'Bad Request',
-    401: 'Unauthorized',
-    403: 'Forbidden',
-    404: 'Not Found',
-    429: 'Too Many Requests',
-    500: 'Internal Server Error',
-    502: 'Bad Gateway',
-    503: 'Service Unavailable',
-  }
-
-  return statusCodes[statusCode] ?? `Unexpected Error: ${statusCode}`
 }
 
 export class FetchError extends OError {
@@ -155,8 +91,6 @@ function fetchJSON<T>(
     method = 'GET',
     credentials = 'same-origin',
     swallowAbortError = true,
-    timeoutMs = DEFAULT_TIMEOUT_MS,
-    signal: externalSignal,
     ...otherOptions
   }: FetchConfig
 ) {
@@ -182,19 +116,10 @@ function fetchJSON<T>(
   // `resolve` will be called when the request succeeds, `reject` will be called when the request fails,
   // but nothing will be called if the request is cancelled via an AbortController.
   return new Promise<T>((resolve, reject) => {
-    const { signal, timedOut, cleanup } = createAbortSignal(
-      timeoutMs,
-      externalSignal
-    )
-    if (signal) {
-      options.signal = signal
-    }
-
     fetch(path, options).then(
       response => {
         return parseResponseBody(response).then(
           data => {
-            cleanup()
             if (response.ok) {
               resolve(data)
             } else {
@@ -211,21 +136,9 @@ function fetchJSON<T>(
             }
           },
           error => {
-            cleanup()
             // swallow the error if the fetch was cancelled (e.g. by cancelling an AbortController on component unmount)
-            if (swallowAbortError && error.name === 'AbortError' && !timedOut()) {
+            if (swallowAbortError && error.name === 'AbortError') {
               // the fetch request was aborted while reading/parsing the response body
-              return
-            }
-            if (error.name === 'AbortError' && timedOut()) {
-              reject(
-                new FetchError(
-                  'Request timed out',
-                  path,
-                  options,
-                  response
-                ).withCause(error)
-              )
               return
             }
             // parsing the response body failed
@@ -241,23 +154,12 @@ function fetchJSON<T>(
         )
       },
       error => {
-        cleanup()
         // swallow the error if the fetch was cancelled (e.g. by cancelling an AbortController on component unmount)
-        if (swallowAbortError && error.name === 'AbortError' && !timedOut()) {
+        if (swallowAbortError && error.name === 'AbortError') {
           // the fetch request was aborted before a response was returned
           return
         }
         // the fetch failed
-        if (error.name === 'AbortError' && timedOut()) {
-          reject(
-            new FetchError(
-              'Request timed out',
-              path,
-              options
-            ).withCause(error)
-          )
-          return
-        }
         reject(
           new FetchError(
             'There was an error fetching the JSON',

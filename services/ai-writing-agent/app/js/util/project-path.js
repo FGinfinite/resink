@@ -19,3 +19,33 @@ export function validateProjectPath(rawPath) {
   }
   return { path: '/' + normalized }
 }
+
+export function normalizeProjectPath(rawPath) {
+  const result = validateProjectPath(rawPath)
+  if (result.error) {
+    throw new Error(result.error)
+  }
+  return result.path
+}
+
+export function projectPathToWorkspaceRelative(projectPath) {
+  const normalizedPath = normalizeProjectPath(projectPath)
+  return normalizedPath.slice(1)
+}
+
+export function resolveWorkspacePath(workspaceRoot, projectPath) {
+  if (!workspaceRoot || typeof workspaceRoot !== 'string') {
+    throw new Error('Workspace root is required.')
+  }
+  const relativePath = projectPathToWorkspaceRelative(projectPath)
+  const absolutePath = path.resolve(workspaceRoot, relativePath)
+  const relativeToRoot = path.relative(path.resolve(workspaceRoot), absolutePath)
+  if (
+    relativeToRoot === '' ||
+    relativeToRoot.startsWith('..') ||
+    path.isAbsolute(relativeToRoot)
+  ) {
+    throw new Error('Resolved path is outside workspace root.')
+  }
+  return absolutePath
+}

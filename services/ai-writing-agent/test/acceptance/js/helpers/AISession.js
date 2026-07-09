@@ -1,19 +1,26 @@
 import Request from 'request'
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:3060'
+export const DEFAULT_USER_ID = '111111111111111111111111'
+export const OTHER_USER_ID = '222222222222222222222222'
 
 const request = Request.defaults({
   baseUrl: DEFAULT_BASE_URL,
+  headers: { 'x-user-id': DEFAULT_USER_ID },
 })
 
 /**
  * Helper for making AI session API requests
  */
 export class AISession {
-  constructor(baseUrl = DEFAULT_BASE_URL) {
+  constructor(baseUrl = DEFAULT_BASE_URL, userId = DEFAULT_USER_ID) {
     this.baseUrl = baseUrl
+    this.userId = userId
     this.sessionId = null
-    this.request = Request.defaults({ baseUrl })
+    this.request = Request.defaults({
+      baseUrl,
+      headers: { 'x-user-id': userId },
+    })
   }
 
   /**
@@ -41,8 +48,8 @@ export class AISession {
       json: { projectId, docId },
     })
 
-    if (response.statusCode === 201 && body.sessionId) {
-      this.sessionId = body.sessionId
+    if (response.statusCode === 201 && body.session?.id) {
+      this.sessionId = body.session.id
     }
 
     return { response, body }
@@ -129,13 +136,24 @@ export class AISession {
 }
 
 // Standalone functions for simpler usage
-export async function createSession(projectId, docId = null) {
+function headersFor(userId = DEFAULT_USER_ID) {
+  return { 'x-user-id': userId }
+}
+
+export async function createSession(projectId, docId = null, options = {}) {
   return new Promise((resolve, reject) => {
     request(
       {
         method: 'post',
         url: '/api/ai/sessions',
-        json: { projectId, docId },
+        headers: headersFor(options.userId),
+        json: {
+          projectId,
+          docId,
+          profile: options.profile,
+          runtimeMode: options.runtimeMode,
+          model: options.model,
+        },
       },
       (err, response, body) => {
         if (err) reject(err)
@@ -145,12 +163,13 @@ export async function createSession(projectId, docId = null) {
   })
 }
 
-export async function getSession(sessionId) {
+export async function getSession(sessionId, options = {}) {
   return new Promise((resolve, reject) => {
     request(
       {
         method: 'get',
         url: `/api/ai/sessions/${sessionId}`,
+        headers: headersFor(options.userId),
         json: true,
       },
       (err, response, body) => {
@@ -161,12 +180,30 @@ export async function getSession(sessionId) {
   })
 }
 
-export async function deleteSession(sessionId) {
+export async function listSessions(projectId, options = {}) {
+  return new Promise((resolve, reject) => {
+    request(
+      {
+        method: 'get',
+        url: `/api/ai/sessions?projectId=${encodeURIComponent(projectId)}`,
+        headers: headersFor(options.userId),
+        json: true,
+      },
+      (err, response, body) => {
+        if (err) reject(err)
+        else resolve({ response, body })
+      }
+    )
+  })
+}
+
+export async function deleteSession(sessionId, options = {}) {
   return new Promise((resolve, reject) => {
     request(
       {
         method: 'delete',
         url: `/api/ai/sessions/${sessionId}`,
+        headers: headersFor(options.userId),
       },
       (err, response, body) => {
         if (err) reject(err)
@@ -177,12 +214,14 @@ export async function deleteSession(sessionId) {
 }
 
 export async function sendMessage(sessionId, content, options = {}) {
+  const { userId, ...bodyOptions } = options
   return new Promise((resolve, reject) => {
     request(
       {
         method: 'post',
         url: `/api/ai/sessions/${sessionId}/messages`,
-        json: { content, ...options },
+        headers: headersFor(userId),
+        json: { content, ...bodyOptions },
       },
       (err, response, body) => {
         if (err) reject(err)

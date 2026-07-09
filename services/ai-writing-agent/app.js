@@ -13,6 +13,7 @@ import {
   initializeRuntimeConfig,
   shutdownRuntimeConfig,
 } from './app/js/RuntimeConfigManager.js'
+import { runSandboxStartupCleanup } from './app/js/sandbox/SandboxStartupCleanup.js'
 
 const port = settings.internal.aiWritingAgent.port
 const host = settings.internal.aiWritingAgent.host
@@ -26,7 +27,10 @@ async function gracefulShutdown(signal) {
   logger.info({ signal }, 'Graceful shutdown requested')
 
   const forceTimer = setTimeout(() => {
-    logger.error({ signal, timeoutMs: SHUTDOWN_TIMEOUT_MS }, 'Graceful shutdown timed out, forcing exit')
+    logger.error(
+      { signal, timeoutMs: SHUTDOWN_TIMEOUT_MS },
+      'Graceful shutdown timed out, forcing exit'
+    )
     process.exit(1)
   }, SHUTDOWN_TIMEOUT_MS)
   forceTimer.unref()
@@ -44,7 +48,7 @@ async function gracefulShutdown(signal) {
   }
 
   if (httpServer) {
-    await new Promise(resolve => {
+    await new Promise((resolve) => {
       httpServer.close((err) => {
         if (err) logger.error({ err }, 'HTTP server close failed')
         resolve()
@@ -77,7 +81,10 @@ process.once('SIGTERM', () => gracefulShutdown('SIGTERM'))
 process.once('SIGINT', () => gracefulShutdown('SIGINT'))
 
 // Block default credentials in production, warn in development
-if (settings.apis.web.user === 'overleaf' && settings.apis.web.pass === 'overleaf') {
+if (
+  settings.apis.web.user === 'overleaf' &&
+  settings.apis.web.pass === 'overleaf'
+) {
   const msg =
     'WEB_API_USER and WEB_API_PASSWORD are using default credentials (overleaf/overleaf). ' +
     'This is insecure for production. Set WEB_API_USER and WEB_API_PASSWORD environment variables.'
@@ -112,6 +119,9 @@ mongoClient
   .then(async () => {
     await ensureIndexes()
     await initializeRuntimeConfig()
+    await runSandboxStartupCleanup().catch((err) => {
+      logger.warn({ err }, 'Sandbox startup cleanup failed')
+    })
     await AgentController.initialize()
     const { server } = await createServer()
     httpServer = server
@@ -123,7 +133,7 @@ mongoClient
       logger.debug(`AI Writing Agent starting up, listening on ${host}:${port}`)
     })
   })
-  .catch(err => {
+  .catch((err) => {
     logger.fatal({ err }, 'Cannot connect to mongo. Exiting.')
     process.exit(1)
   })

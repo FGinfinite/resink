@@ -35,7 +35,6 @@ type LogEntryProps = {
   className?: string
   actionButtonsOverride?: React.ReactNode
   openCollapseIconOverride?: string
-  extraActions?: React.ReactNode
 }
 
 function LogEntry(props: LogEntryProps & { autoExpand?: boolean }) {
@@ -72,7 +71,6 @@ export function ControlledLogEntry({
   setCollapsed,
   actionButtonsOverride,
   openCollapseIconOverride,
-  extraActions,
 }: LogEntryProps & {
   collapsed: boolean
   setCollapsed: Dispatch<SetStateAction<boolean>>
@@ -103,7 +101,6 @@ export function ControlledLogEntry({
         logEntry={logEntry}
         actionButtonsOverride={actionButtonsOverride}
         openCollapseIconOverride={openCollapseIconOverride}
-        extraActions={extraActions}
       />
       <div
         className={classNames('horizontal-divider', { hidden: collapsed })}

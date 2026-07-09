@@ -5,26 +5,52 @@ import path from 'node:path'
 import fs from 'node:fs'
 
 import { ObjectId, db, allocateSeq, mongoClient } from './mongodb.js'
-import { AgentLoop } from './agent/AgentLoop.js'
+import { createAgentLoopForSession } from './agent/AgentLoopFactory.js'
 import { ConfirmationChannel } from './agent/ConfirmationChannel.js'
 import { ContextManager } from './agent/ContextManager.js'
+import { AgentMessageStore } from './agent/AgentMessageStore.js'
+import {
+  AgentChangeSetService,
+  serializeChangeSet,
+} from './agent/AgentChangeSetService.js'
+import { LiveDraftChangeBridge } from './agent/LiveDraftChangeBridge.js'
+import { CanonicalWritebackService } from './agent/CanonicalWritebackService.js'
+import { PersistentWorkspaceManager } from './sandbox/PersistentWorkspaceManager.js'
 import { ToolRegistry } from './tool/ToolRegistry.js'
+import { ToolsetPolicy } from './tool/ToolsetPolicy.js'
 import { ReadDocumentTool } from './tool/read.js'
 import { EditDocumentTool } from './tool/edit.js'
 import { DeleteFileTool } from './tool/delete.js'
 import { ListFilesTool } from './tool/list.js'
 import { SearchProjectTool } from './tool/search.js'
 import { BibLookupTool } from './tool/bib_lookup.js'
+import { BibManageTool } from './tool/bib_manage.js'
 import { DocStructureMapTool } from './tool/doc_structure_map.js'
+import { LabelRefAuditTool } from './tool/label_ref_audit.js'
 import { ViewFileTool } from './tool/view-file.js'
+import { CompileLatexTool } from './tool/compile_latex.js'
+import { SyncWorkspaceChangesTool } from './tool/sync_workspace_changes.js'
+import { RunCommandTool } from './tool/run_command.js'
+import { WriteWorkspaceFileTool } from './tool/write_workspace_file.js'
 import { ActivateSkillTool } from './tool/activate_skill.js'
-import { DelegateTaskTool } from './tool/delegate_task.js'
+import { ReadSkillReferenceTool } from './tool/read_skill_reference.js'
+import { RunSkillScriptTool } from './tool/run_skill_script.js'
+import { StartAgentTaskTool } from './tool/start_agent_task.js'
+import { StartAgentTeamTool } from './tool/start_agent_team.js'
+import { HandoffToAgentTool, ReturnFromHandoffTool } from './tool/handoff_tools.js'
+import { ProposeMemoryTool } from './tool/propose_memory.js'
+import {
+  AgentTeamRunService,
+  normalizeObjectIdString,
+} from './agent-team/AgentTeamRunService.js'
+import { AgentTeamOrchestrator } from './agent-team/AgentTeamOrchestrator.js'
 import { SkillRegistry } from './skill/SkillRegistry.js'
-import { AgentTypeRegistry } from './skill/AgentTypeRegistry.js'
 import {
   SessionNotFoundError,
+  SessionExpiredError,
   ChangeNotFoundError,
   ValidationError,
+  ForbiddenError,
 } from './Errors.js'
 import {
   DocumentAdapter,
@@ -34,14 +60,49 @@ import {
 } from './adapter/DocumentAdapter.js'
 import { ProjectAdapter } from './adapter/ProjectAdapter.js'
 import { FileStoreAdapter } from './adapter/FileStoreAdapter.js'
-import { MemoryManager, setMemoryManager } from './memory/MemoryManager.js'
-import { ProjectRulesProvider } from './memory/ProjectRulesProvider.js'
+import { ProjectInstructionService } from './agent-context/ProjectInstructionService.js'
+import { MemoryService } from './agent-context/MemoryService.js'
+import { MemorySuggestionService } from './agent-context/MemorySuggestionService.js'
+import { ContextSnapshotService } from './agent-context/ContextSnapshotService.js'
+import { SessionSummaryService } from './agent-context/SessionSummaryService.js'
 import { RunBudget } from './agent/RunBudget.js'
 import { getModelConfigService } from './ModelConfigService.js'
+import { getAgentRuntimeConfig } from './RuntimeConfigManager.js'
+import { AGENT_LOOP_V2_RUNTIME } from './agent/AgentLoopV2.js'
 const documentAdapter = new DocumentAdapter()
 const projectAdapter = new ProjectAdapter()
 const fileStoreAdapter = new FileStoreAdapter()
 const contextManager = new ContextManager()
+const agentMessageStore = new AgentMessageStore({ db, allocateSeq })
+const agentChangeSetService = new AgentChangeSetService({ db })
+const canonicalWritebackService = new CanonicalWritebackService({
+  documentAdapter,
+  changeSetService: agentChangeSetService,
+})
+const liveDraftChangeBridge = new LiveDraftChangeBridge({
+  changeSetService: agentChangeSetService,
+  canonicalWritebackService,
+})
+const persistentWorkspaceManager = new PersistentWorkspaceManager()
+const toolsetPolicy = new ToolsetPolicy()
+let agentTeamOrchestrator = null
+const agentTeamRunService = new AgentTeamRunService({
+  db,
+  stopSessionIds: stopActiveSessionsById,
+  retryTaskRunner: retryAgentTeamTask,
+})
+
+function buildAgentLoopAdapters(llmAdapter) {
+  return {
+    document: documentAdapter,
+    project: projectAdapter,
+    llm: llmAdapter,
+    fileStore: fileStoreAdapter,
+    workspaceManager: persistentWorkspaceManager,
+    agentMessageStore,
+    liveDraftChangeBridge,
+  }
+}
 
 const PROJECT_ID_RE = /^[0-9a-fA-F]{24}$/
 const USER_ID_RE = /^[0-9a-fA-F]{24}$/
@@ -49,8 +110,43 @@ const DOC_ID_RE = /^[0-9a-fA-F]{24}$/
 
 const MAX_SESSION_TITLE_LENGTH = settings.aiAssistant?.maxSessionTitleLength || 200
 const CHANGE_HISTORY_MAX_ITEMS = settings.aiAssistant?.maxChangeHistoryItems || 200
+const SESSION_TTL_MS =
+  settings.aiAssistant?.sessionTtlMs || 30 * 24 * 60 * 60 * 1000
+const SSE_HEARTBEAT_MS = settings.aiAssistant?.sseHeartbeatMs || 15_000
 // eslint-disable-next-line no-control-regex
 const SESSION_TITLE_CONTROL_RE = /[\x00-\x1f\x7f]/g
+
+function getEnabledAgentContextConfig() {
+  const agentContext = getAgentRuntimeConfig().agentContext || {}
+  if (!agentContext.enabled) {
+    throw new ForbiddenError('Agent Context is disabled')
+  }
+  return agentContext
+}
+
+function createProjectInstructionService(agentContext) {
+  return new ProjectInstructionService({
+    projectAdapter,
+    documentAdapter,
+    changeSetService: agentChangeSetService,
+    canonicalWritebackService,
+    projectInstructionsFile: agentContext.projectInstructionsFile,
+    maxInstructionChars: agentContext.maxInstructionChars,
+  })
+}
+
+function createMemoryService(agentContext) {
+  return new MemoryService({
+    maxMemoryChars: agentContext.maxMemoryChars,
+  })
+}
+
+function createMemorySuggestionService(agentContext) {
+  return new MemorySuggestionService({
+    memoryService: createMemoryService(agentContext),
+    ttlMs: agentContext.suggestionTtlMs,
+  })
+}
 
 function sanitizeSessionTitle(rawTitle) {
   if (rawTitle == null) return null
@@ -60,6 +156,267 @@ function sanitizeSessionTitle(rawTitle) {
     .trim()
   if (!cleaned) return null
   return cleaned.slice(0, MAX_SESSION_TITLE_LENGTH)
+}
+
+function isDraftBackedChange(change) {
+  return (
+    change?.changeSetId &&
+    ObjectId.isValid(change.changeSetId) &&
+    change?.id &&
+    ObjectId.isValid(change.id)
+  )
+}
+
+async function syncDraftBackedChangeStatus(change, session, status, fields = {}) {
+  if (!isDraftBackedChange(change)) return null
+  return agentChangeSetService.updateDraftStatus({
+    changeId: change.id,
+    sessionId: session._id,
+    projectId: session.projectId,
+    userId: session.userId,
+    status,
+    ...fields,
+  })
+}
+
+function resolveDefaultSessionRuntimeMode(requestedRuntimeMode) {
+  if (typeof requestedRuntimeMode === 'string' && requestedRuntimeMode.trim()) {
+    const normalized = requestedRuntimeMode.trim()
+    return normalized === 'sandbox-v0'
+      ? normalized
+      : AGENT_LOOP_V2_RUNTIME
+  }
+  return getAgentRuntimeConfig().runtimeMode
+}
+
+function serializeRuntimeMode(runtimeMode) {
+  return runtimeMode === 'sandbox-v0'
+    ? runtimeMode
+    : AGENT_LOOP_V2_RUNTIME
+}
+
+function serializeSession(session, messages = [], changeSets = []) {
+  return {
+    id: session._id.toString(),
+    projectId: session.projectId,
+    userId: session.userId || null,
+    profile: session.profile || session.agentName || 'default',
+    runtimeMode: serializeRuntimeMode(session.runtimeMode),
+    model: session.model || null,
+    status: session.status || 'active',
+    parentSessionId:
+      session.parentSessionId?.toString?.() ||
+      session.parentId?.toString?.() ||
+      null,
+    rootSessionId:
+      session.rootSessionId?.toString?.() || session._id.toString(),
+    workspaceId: session.workspaceId || null,
+    workspaceStatus: session.workspaceStatus || null,
+    workspaceUpdatedAt: session.workspaceUpdatedAt?.getTime?.() || null,
+    workspaceDrift: session.workspaceDrift || session.lastDrift || null,
+    pendingChanges: Array.isArray(session.pendingChanges)
+      ? session.pendingChanges
+      : [],
+    changeSets,
+    artifacts: Array.isArray(session.artifacts) ? session.artifacts : [],
+    activeHandoff: session.activeHandoff || null,
+    activeTurn: session.activeTurn || null,
+    title: session.title || 'Untitled session',
+    messages,
+    changeHistory: session.changeHistory || [],
+    hasMore: session.hasMore,
+    nextBeforeSeq: session.nextBeforeSeq,
+    createdAt: session.createdAt?.getTime?.() || Date.now(),
+    updatedAt: session.updatedAt?.getTime?.() || Date.now(),
+    lastTurnAt:
+      session.lastTurnAt?.getTime?.() ||
+      session.updatedAt?.getTime?.() ||
+      null,
+    expiresAt: session.expiresAt?.getTime?.() || null,
+    archivedAt: session.archivedAt?.getTime?.() || null,
+  }
+}
+
+function serializeSessionSummary(session) {
+  return {
+    id: session._id.toString(),
+    projectId: session.projectId,
+    title: session.title || 'Untitled session',
+    profile: session.profile || session.agentName || 'default',
+    runtimeMode: serializeRuntimeMode(session.runtimeMode),
+    model: session.model || null,
+    status: session.status || 'active',
+    parentSessionId:
+      session.parentSessionId?.toString?.() ||
+      session.parentId?.toString?.() ||
+      null,
+    workspaceId: session.workspaceId || null,
+    createdAt: session.createdAt?.getTime?.() || Date.now(),
+    updatedAt: session.updatedAt?.getTime?.() || Date.now(),
+    lastTurnAt:
+      session.lastTurnAt?.getTime?.() ||
+      session.updatedAt?.getTime?.() ||
+      null,
+    expiresAt: session.expiresAt?.getTime?.() || null,
+  }
+}
+
+function serializeDate(value) {
+  return value?.toISOString?.() || null
+}
+
+function serializeMemory(memory) {
+  return {
+    id: memory._id?.toString?.() || memory._id,
+    content: memory.content,
+    scope: memory.scope,
+    projectId: memory.projectId || null,
+    status: memory.status,
+    source: memory.source,
+    tags: memory.tags || [],
+    createdAt: serializeDate(memory.createdAt),
+    updatedAt: serializeDate(memory.updatedAt),
+    disabledAt: serializeDate(memory.disabledAt),
+    deletedAt: serializeDate(memory.deletedAt),
+    lastUsedAt: serializeDate(memory.lastUsedAt),
+    useCount: memory.useCount || 0,
+  }
+}
+
+function serializeMemorySuggestion(suggestion) {
+  return {
+    id: suggestion._id?.toString?.() || suggestion._id,
+    proposedContent: suggestion.proposedContent,
+    scope: suggestion.scope,
+    projectId: suggestion.projectId || null,
+    sessionId: suggestion.sessionId,
+    messageId: suggestion.messageId || null,
+    reason: suggestion.reason,
+    status: suggestion.status,
+    memoryId: suggestion.memoryId?.toString?.() || suggestion.memoryId || null,
+    createdAt: serializeDate(suggestion.createdAt),
+    updatedAt: serializeDate(suggestion.updatedAt),
+    acceptedAt: serializeDate(suggestion.acceptedAt),
+    dismissedAt: serializeDate(suggestion.dismissedAt),
+    expiresAt: serializeDate(suggestion.expiresAt),
+  }
+}
+
+function serializeContextSnapshot(snapshot) {
+  if (!snapshot) return null
+  return {
+    id: snapshot._id?.toString?.() || snapshot._id,
+    sessionId: snapshot.sessionId,
+    projectId: snapshot.projectId,
+    userId: snapshot.userId,
+    turnId: snapshot.turnId,
+    messageId: snapshot.messageId || null,
+    sourceRefs: snapshot.sourceRefs || [],
+    totals: snapshot.totals || {
+      sourceCount: 0,
+      tokenEstimate: 0,
+      memoryCount: 0,
+      recalledCount: 0,
+    },
+    createdAt: serializeDate(snapshot.createdAt),
+  }
+}
+
+function serializeSessionSummaryRecord(summary) {
+  if (!summary) return null
+  return {
+    id: summary._id?.toString?.() || summary._id,
+    sessionId: summary.sessionId,
+    projectId: summary.projectId,
+    userId: summary.userId,
+    summary: summary.summary,
+    sourceMessageRange: summary.sourceMessageRange || { fromSeq: 0, toSeq: 0 },
+    tokenEstimate: summary.tokenEstimate || 0,
+    status: summary.status,
+    createdAt: serializeDate(summary.createdAt),
+    updatedAt: serializeDate(summary.updatedAt),
+    supersededAt: serializeDate(summary.supersededAt),
+  }
+}
+
+function parseObjectId(value, field) {
+  if (!ObjectId.isValid(value)) {
+    throw new ValidationError(`Invalid ${field} format`)
+  }
+  return new ObjectId(value)
+}
+
+function serializeMessages(messages) {
+  return messages.map((msg, index) => ({
+    id: msg._id?.toString() || `msg-${msg.seq || index}`,
+    role: msg.role,
+    content: msg.content,
+    contentBlocks: msg.contentBlocks?.filter(block => block.type !== 'thinking'),
+    status: msg.status,
+    error: msg.error,
+    isCompaction: msg.isSummary || undefined,
+    timestamp: msg.timestamp?.getTime?.() || Date.now(),
+    // Expose attachment metadata (strip storageKey for security)
+    ...(msg.attachments?.length > 0 && {
+      attachments: msg.attachments.map(a => ({
+        id: a.id,
+        filename: a.filename,
+        mimeType: a.mimeType,
+        size: a.size,
+      })),
+    }),
+  }))
+}
+
+function serializeToolCalls(toolCalls) {
+  return toolCalls.map(toolCall => ({
+    id: toolCall.toolCallId,
+    messageId: toolCall.messageId || null,
+    tool: toolCall.name || 'unknown',
+    arguments: toolCall.arguments || {},
+    status: toolCall.status || 'unknown',
+    resultSummary: toolCall.resultSummary || null,
+    durationMs: toolCall.durationMs || null,
+    error: toolCall.error || null,
+    relatedChangeIds: toolCall.relatedChangeIds || [],
+    relatedArtifactIds: toolCall.relatedArtifactIds || [],
+    createdAt: toolCall.createdAt?.getTime?.() || null,
+    startedAt: toolCall.startedAt?.getTime?.() || null,
+    finishedAt: toolCall.finishedAt?.getTime?.() || null,
+  }))
+}
+
+function isTerminalSessionStatus(status) {
+  return status === 'archived' || status === 'ended'
+}
+
+async function ensurePersistentWorkspaceForSession(session, userId) {
+  if (!userId) return null
+  try {
+    const result = await persistentWorkspaceManager.ensureWorkspace({
+      sessionId: session._id.toString(),
+      projectId: session.projectId,
+      userId,
+    })
+    return {
+      workspace: result.workspace,
+      workspaceId: result.workspace._id,
+      workspacePath: result.sandboxSession?.workspacePath || null,
+      sandboxSession: result.sandboxSession || null,
+      created: result.created,
+      drift: result.drift,
+    }
+  } catch (error) {
+    logger.warn(
+      {
+        err: error,
+        sessionId: session._id.toString(),
+        projectId: session.projectId,
+      },
+      'persistent workspace ensure failed; continuing without workspace'
+    )
+    return null
+  }
 }
 
 // Short-lived cache for project access checks (userId:projectId → { result, expiry })
@@ -235,6 +592,21 @@ async function shutdown({ reason } = {}) {
       logger.warn({ sessionId: sid, err }, 'Failed to abort confirmation channel during shutdown')
     }
   }
+  await db.aiSessions.updateMany(
+    {
+      _id: { $in: Array.from(activeAgentLoops.keys()).map(sid => new ObjectId(sid)) },
+      'activeTurn.status': 'running',
+    },
+    {
+      $set: {
+        'activeTurn.status': 'interrupted',
+        'activeTurn.reason': reason || 'shutdown',
+        'activeTurn.interruptedAt': new Date(),
+        _streamingInterrupted: true,
+        updatedAt: new Date(),
+      },
+    }
+  ).catch(err => logger.warn({ err }, 'Failed to persist interrupted active turns during shutdown'))
   activeRootSessionsByUser.clear()
 }
 
@@ -261,25 +633,47 @@ toolRegistry.register(new DeleteFileTool())
 toolRegistry.register(new ListFilesTool())
 toolRegistry.register(new SearchProjectTool())
 toolRegistry.register(new BibLookupTool())
+toolRegistry.register(new BibManageTool())
 toolRegistry.register(new DocStructureMapTool())
+toolRegistry.register(new LabelRefAuditTool())
 toolRegistry.register(new ViewFileTool())
+toolRegistry.register(new CompileLatexTool())
+toolRegistry.register(new RunCommandTool())
+toolRegistry.register(new WriteWorkspaceFileTool())
+toolRegistry.register(new SyncWorkspaceChangesTool({
+  workspaceManager: persistentWorkspaceManager,
+}))
+toolRegistry.register(new ProposeMemoryTool({
+  suggestionService: createMemorySuggestionService(
+    getAgentRuntimeConfig().agentContext || {}
+  ),
+}))
+
+function getScopedToolRegistry(session, options = {}) {
+  const agentContext = getAgentRuntimeConfig().agentContext || {}
+  const policy = toolsetPolicy.resolve({
+    profile: session?.profile || session?.agentName || 'default',
+    policy: {
+      allowWrite: options.allowWrite !== false,
+      allowSubagents: !session?.parentId && options.allowSubagents !== false,
+      allowHandoff: options.allowHandoff !== false,
+      allowDiagnostics: options.allowDiagnostics !== false,
+      allowSkillRuntime: options.allowSkillRuntime !== false,
+      allowCitation: options.allowCitation !== false,
+      allowReview: options.allowReview !== false,
+      allowCompile: options.allowCompile !== false,
+      allowExec: options.allowExec !== false,
+      allowWorkspaceSync: options.allowWorkspaceSync !== false,
+      allowMemoryProposals: agentContext.enabled === true &&
+        !session?.parentId &&
+        options.allowMemoryProposals !== false,
+    },
+  })
+  return toolRegistry.scoped(policy.tools)
+}
 
 // Skill registry (initialized asynchronously)
 let skillRegistry = null
-let agentTypeRegistry = null
-
-/**
- * Normalize and validate a requested skill name against the skill registry.
- * Returns the trimmed skill name if valid, or null if unknown / missing.
- * @param {string|undefined|null} rawSkill
- * @returns {string|null}
- */
-function normalizeRequestedSkill(rawSkill) {
-  if (!skillRegistry || rawSkill == null) return null
-  const name = String(rawSkill).trim()
-  if (!name) return null
-  return skillRegistry.get(name) ? name : null
-}
 
 /**
  * Initialize async resources (skill registry, etc.)
@@ -289,26 +683,76 @@ async function initialize() {
   skillRegistry = new SkillRegistry()
   await skillRegistry.loadAll()
   toolRegistry.register(new ActivateSkillTool(skillRegistry))
+  toolRegistry.register(new ReadSkillReferenceTool(skillRegistry))
+  toolRegistry.register(new RunSkillScriptTool({ skillRegistry }))
 
-  agentTypeRegistry = new AgentTypeRegistry()
-  await agentTypeRegistry.loadAll()
-  toolRegistry.register(new DelegateTaskTool(agentTypeRegistry))
+  agentTeamOrchestrator = new AgentTeamOrchestrator({
+    store: agentTeamRunService.store,
+    agentController: {
+      createChildSession,
+      updateSessionStatus,
+    },
+    parentToolRegistry: toolRegistry,
+    skillRegistry,
+  })
 
-  const memoryManager = new MemoryManager()
-  memoryManager.register(new ProjectRulesProvider())
-  setMemoryManager(memoryManager)
+  toolRegistry.register(new StartAgentTaskTool({
+    orchestrator: agentTeamOrchestrator,
+  }))
+  toolRegistry.register(new StartAgentTeamTool({
+    orchestrator: agentTeamOrchestrator,
+  }))
+  toolRegistry.register(new HandoffToAgentTool({
+    agentController: {
+      createChildSession,
+      updateSessionStatus,
+    },
+    parentToolRegistry: toolRegistry,
+  }))
+  toolRegistry.register(new ReturnFromHandoffTool({
+    agentController: {
+      createChildSession,
+      updateSessionStatus,
+    },
+    parentToolRegistry: toolRegistry,
+  }))
 
   const sysConfig = await getModelConfigService().getSystemConfig()
   if (!sysConfig) {
     logger.warn('No model config found in DB. Run: node scripts/seed-model-configs.js')
   }
+
+  await reconcileInterruptedTurns()
+}
+
+function mergeSessionArtifacts(sessionArtifacts = [], artifactDocs = []) {
+  const merged = new Map()
+  for (const artifact of sessionArtifacts || []) {
+    const id = artifact.id || artifact._id?.toString?.() || artifact._id
+    if (!id) continue
+    merged.set(id, {
+      id,
+      path: artifact.path,
+      size: artifact.size,
+    })
+  }
+  for (const artifact of artifactDocs || []) {
+    const id = artifact._id?.toString?.() || artifact._id || artifact.id
+    if (!id) continue
+    merged.set(id, {
+      id,
+      path: artifact.path,
+      size: artifact.size,
+    })
+  }
+  return [...merged.values()]
 }
 
 /**
  * Create a new AI session
  */
 async function createSession(req, res) {
-  const { projectId, docId, title } = req.body
+  const { projectId, docId, title, profile, runtimeMode, model } = req.body
   const userId = req.headers['x-user-id'] || null
 
   if (!projectId) {
@@ -323,21 +767,31 @@ async function createSession(req, res) {
     return res.status(403).json({ error: 'Access denied' })
   }
 
+  const now = new Date()
   const session = {
     _id: new ObjectId(),
     projectId,
     userId,
+    profile: typeof profile === 'string' && profile.trim()
+      ? profile.trim()
+      : 'default',
+    runtimeMode: resolveDefaultSessionRuntimeMode(runtimeMode),
+    model: typeof model === 'string' && model.trim() ? model.trim() : null,
     currentDocId: docId || null,
     title: sanitizeSessionTitle(title) || `New session - ${new Date().toISOString().slice(5, 16).replace('T', ' ')}`,
     changeHistory: [],
     parentId: null,
+    parentSessionId: null,
     rootSessionId: null, // will be set to own _id below
     agentName: null,
+    workspaceId: null,
     _nextSeq: 1,
     _latestSummarySeq: null,
     status: 'active',
-    createdAt: new Date(),
-    updatedAt: new Date(),
+    createdAt: now,
+    updatedAt: now,
+    lastTurnAt: null,
+    expiresAt: new Date(now.getTime() + SESSION_TTL_MS),
   }
   session.rootSessionId = session._id
 
@@ -348,17 +802,7 @@ async function createSession(req, res) {
     'AI session created'
   )
 
-  res.status(201).json({
-    session: {
-      id: session._id.toString(),
-      projectId: session.projectId,
-      title: session.title,
-      messages: [],
-      changeHistory: session.changeHistory,
-      createdAt: session.createdAt.getTime(),
-      updatedAt: session.updatedAt.getTime(),
-    },
-  })
+  res.status(201).json({ session: serializeSession(session, []) })
 }
 
 const MAX_DELEGATION_DEPTH = new RunBudget().maxDepth
@@ -372,11 +816,27 @@ const MAX_DELEGATION_DEPTH = new RunBudget().maxDepth
  * @param {string} options.agentName - Agent type name
  * @returns {Promise<object>} The child session document
  */
-async function createChildSession({ parentId, projectId, userId, agentName }) {
+async function createChildSession({
+  parentId,
+  projectId,
+  userId,
+  agentName,
+  requestedToolNames = [],
+  allowedToolNames = [],
+}) {
   const parentObjectId = new ObjectId(parentId)
   const parent = await db.aiSessions.findOne(
     { _id: parentObjectId },
-    { projection: { rootSessionId: 1, parentId: 1, projectId: 1, userId: 1 } }
+    {
+      projection: {
+        rootSessionId: 1,
+        parentId: 1,
+        projectId: 1,
+        userId: 1,
+        runtimeMode: 1,
+        model: 1,
+      },
+    }
   )
 
   if (!parent) {
@@ -412,13 +872,22 @@ async function createChildSession({ parentId, projectId, userId, agentName }) {
     title: `子 Agent: ${agentName}`,
     changeHistory: [],
     parentId: parentObjectId,
+    parentSessionId: parentObjectId,
     rootSessionId: parent.rootSessionId || parentObjectId,
     agentName,
+    profile: agentName,
+    runtimeMode: serializeRuntimeMode(parent.runtimeMode),
+    model: parent.model || null,
+    requestedToolNames: Array.from(new Set(requestedToolNames)),
+    allowedToolNames: Array.from(new Set(allowedToolNames)),
+    workspaceId: null,
     _nextSeq: 1,
     _latestSummarySeq: null,
     status: 'active',
     createdAt: new Date(),
     updatedAt: new Date(),
+    lastTurnAt: null,
+    expiresAt: new Date(Date.now() + SESSION_TTL_MS),
   }
 
   await db.aiSessions.insertOne(childSession)
@@ -432,15 +901,38 @@ async function createChildSession({ parentId, projectId, userId, agentName }) {
 }
 
 /**
- * Mark a child session as completed or errored (internal)
+ * Mark a child session as completed, stopped, or errored (internal)
  * @param {string} sessionId - Session ID string
- * @param {'completed'|'error'} status
+ * @param {'completed'|'stopped'|'error'} status
  */
 async function updateSessionStatus(sessionId, status) {
   await db.aiSessions.updateOne(
     { _id: new ObjectId(sessionId) },
-    { $set: { status, updatedAt: new Date() } }
+    { $set: { status, updatedAt: new Date(), lastTurnAt: new Date() } }
   )
+}
+
+async function reconcileInterruptedTurns() {
+  const now = new Date()
+  const result = await db.aiSessions.updateMany(
+    { 'activeTurn.status': 'running' },
+    {
+      $set: {
+        'activeTurn.status': 'interrupted_after_restart',
+        'activeTurn.reason': 'service_restart',
+        'activeTurn.interruptedAt': now,
+        _streamingInterrupted: true,
+        updatedAt: now,
+      },
+    }
+  )
+  if (result.modifiedCount > 0) {
+    logger.warn(
+      { count: result.modifiedCount },
+      'Reconciled active AI turns interrupted by service restart'
+    )
+  }
+  return result
 }
 
 /**
@@ -468,9 +960,29 @@ async function listSessions(req, res) {
 
   const sessions = await db.aiSessions
     .find(
-      { projectId, userId, parentId: null, status: { $ne: 'ended' } },
       {
-        projection: { _id: 1, projectId: 1, title: 1, createdAt: 1, updatedAt: 1 },
+        projectId,
+        userId,
+        parentId: null,
+        status: { $nin: ['ended', 'archived'] },
+      },
+      {
+        projection: {
+          _id: 1,
+          projectId: 1,
+          title: 1,
+          profile: 1,
+          runtimeMode: 1,
+          model: 1,
+          status: 1,
+          parentId: 1,
+          parentSessionId: 1,
+          workspaceId: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          lastTurnAt: 1,
+          expiresAt: 1,
+        },
       }
     )
     .sort({ updatedAt: -1 })
@@ -478,13 +990,7 @@ async function listSessions(req, res) {
     .toArray()
 
   res.json({
-    sessions: sessions.map(s => ({
-      id: s._id.toString(),
-      projectId: s.projectId,
-      title: s.title || 'Untitled session',
-      createdAt: s.createdAt?.getTime() || Date.now(),
-      updatedAt: s.updatedAt?.getTime() || Date.now(),
-    })),
+    sessions: sessions.map(serializeSessionSummary),
   })
 }
 
@@ -565,36 +1071,206 @@ async function getSession(req, res) {
     hasMore = false
   }
 
-  res.json({
-    session: {
-      id: session._id.toString(),
+  const [toolCalls, changeSets, workspace, artifacts] = await Promise.all([
+    agentMessageStore.listToolCalls(session._id),
+    agentChangeSetService.listChangeSets({
+      sessionId: session._id,
       projectId: session.projectId,
-      title: session.title || 'Untitled session',
-      messages: messages.map(msg => ({
-        id: msg._id?.toString() || `msg-${Date.now()}`,
-        role: msg.role,
-        content: msg.content,
-        contentBlocks: msg.contentBlocks,
-        childSessionParts: msg.childSessionParts,
-        isCompaction: msg.isSummary || undefined,
-        timestamp: msg.timestamp?.getTime() || Date.now(),
-        // Expose attachment metadata (strip storageKey for security)
-        ...(msg.attachments?.length > 0 && {
-          attachments: msg.attachments.map(a => ({
-            id: a.id,
-            filename: a.filename,
-            mimeType: a.mimeType,
-            size: a.size,
-          })),
-        }),
-      })),
-      hasMore,
-      nextBeforeSeq,
-      changeHistory: session.changeHistory || [],
-      createdAt: session.createdAt?.getTime() || Date.now(),
-      updatedAt: session.updatedAt?.getTime() || Date.now(),
+      userId: session.userId,
+    }),
+    session.workspaceId
+      ? db.aiAgentWorkspaces.findOne(
+        { _id: session.workspaceId },
+        { projection: { status: 1, lastDrift: 1, updatedAt: 1 } }
+      )
+      : null,
+    db.aiSandboxArtifacts
+      .find(
+        {
+          sessionId: session._id.toString(),
+          $or: [
+            { expiresAt: { $exists: false } },
+            { expiresAt: { $gt: new Date() } },
+          ],
+        },
+        { projection: { _id: 1, path: 1, size: 1, createdAt: 1 } }
+      )
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .toArray(),
+  ])
+  session.workspaceDrift = workspace?.lastDrift || session.workspaceDrift || null
+  session.workspaceStatus = workspace?.status || session.workspaceStatus || null
+  session.workspaceUpdatedAt = workspace?.updatedAt || session.workspaceUpdatedAt || null
+  session.artifacts = mergeSessionArtifacts(session.artifacts, artifacts)
+  const serialized = serializeSession(
+    session,
+    serializeMessages(messages),
+    changeSets.map(({ changeSet, draftChanges }) =>
+      serializeChangeSet(changeSet, draftChanges)
+    )
+  )
+  serialized.toolCalls = serializeToolCalls(toolCalls)
+  serialized.hasMore = hasMore
+  serialized.nextBeforeSeq = nextBeforeSeq
+  res.json({ session: serialized })
+}
+
+async function listTeamRuns(req, res) {
+  const session = await _loadAndAuthorizeSession(req, res, { allowTerminal: true })
+  if (!session) return
+  const status = typeof req.query.status === 'string' ? req.query.status : undefined
+  const teamRuns = await agentTeamRunService.listTeamRuns({
+    session,
+    userId: req.headers['x-user-id'],
+    status,
+  })
+  res.json({ teamRuns })
+}
+
+async function getTeamRun(req, res) {
+  const session = await _loadAndAuthorizeSession(req, res, { allowTerminal: true })
+  if (!session) return
+  const teamId = normalizeObjectIdString(req.params.teamId, 'teamId')
+  const teamRun = await agentTeamRunService.getTeamRun({
+    session,
+    userId: req.headers['x-user-id'],
+    teamId,
+  })
+  if (!teamRun) return res.status(404).json({ error: 'Team run not found' })
+  res.json({ teamRun })
+}
+
+async function cancelTeamRun(req, res) {
+  const session = await _loadAndAuthorizeSession(req, res, { allowTerminal: true })
+  if (!session) return
+  const teamId = normalizeObjectIdString(req.params.teamId, 'teamId')
+  const reason =
+    typeof req.body?.reason === 'string' && req.body.reason.trim()
+      ? req.body.reason.trim().slice(0, 120)
+      : 'user-cancelled'
+  const existingTeamRun = await agentTeamRunService.getTeamRun({
+    session,
+    userId: req.headers['x-user-id'],
+    teamId,
+  })
+  if (!existingTeamRun) return res.status(404).json({ error: 'Team run not found' })
+  const stoppedSessionIds = await stopActiveSessionTree(session)
+  const teamRun = await agentTeamRunService.cancelTeamRun({
+    session,
+    userId: req.headers['x-user-id'],
+    teamId,
+    reason,
+  })
+  if (!teamRun) return res.status(404).json({ error: 'Team run not found' })
+  res.json({ teamRun, stoppedSessionIds })
+}
+
+async function retryTeamRunTask(req, res) {
+  const session = await _loadAndAuthorizeSession(req, res, { allowTerminal: true })
+  if (!session) return
+  const teamId = normalizeObjectIdString(req.params.teamId, 'teamId')
+  const taskId = normalizeObjectIdString(req.params.taskId, 'taskId')
+  try {
+    const result = await agentTeamRunService.retryTask({
+      session,
+      userId: req.headers['x-user-id'],
+      teamId,
+      taskId,
+    })
+    if (!result) return res.status(404).json({ error: 'Team run not found' })
+    res.status(202).json(result)
+  } catch (error) {
+    if (error.statusCode === 404) {
+      return res.status(404).json({ error: error.message })
+    }
+    if (error.statusCode === 409) {
+      return res.status(409).json({ error: error.message })
+    }
+    if (error.statusCode === 501) {
+      return res.status(501).json({ error: error.message })
+    }
+    throw error
+  }
+}
+
+async function retryAgentTeamTask({ session, userId, team, sourceTask, retryTask }) {
+  if (!agentTeamOrchestrator) {
+    const error = new Error('Task retry runner is not initialized')
+    error.statusCode = 501
+    throw error
+  }
+  const slot = (await getModelConfigService().getSystemConfig())?.defaultSlot
+  if (!slot) {
+    throw new Error('No model configuration found. Admin must configure models first.')
+  }
+  const resolved = await getModelConfigService().resolveSlot(slot)
+  const result = await agentTeamOrchestrator.runTaskInTeam({
+    sessionId: session._id.toString(),
+    rootSessionId: team.rootSessionId?.toString?.() || session._id.toString(),
+    projectId: session.projectId,
+    userId,
+    team,
+    task: retryTask,
+    taskSpec: {
+      capabilityName: retryTask.agentName,
+      capabilityVersion: retryTask.agentVersion,
+      mode: retryTask.mode,
+      objective: retryTask.objective,
+      acceptanceCriteria: retryTask.acceptanceCriteria || [],
+      input: {
+        ...(retryTask.input || {}),
+        retryOfTaskId: sourceTask._id.toString(),
+      },
+      outputSchema: retryTask.outputSchema || { type: 'object' },
+      policy: retryTask.policy || {},
+      timeoutMs: retryTask.timeoutMs || undefined,
+      retryPolicy: retryTask.retryPolicy || {},
+    },
+    parentPolicy: team.policySummary || {},
+    sessionState: {},
+    llmAdapter: resolved.adapter,
+    adapters: buildAgentLoopAdapters(resolved.adapter),
+    persistentWorkspace: null,
+    agentMessageStore,
+    activeChangeSetId: team.rootChangeSetId || null,
+    disablePersistence: false,
+  })
+  const refreshedRun = await agentTeamRunService.store.loadTeamRun({
+    teamId: team._id,
+    projectId: session.projectId,
+    userId,
+  })
+  const teamStatus = summarizeTeamStatusAfterRetry(refreshedRun)
+  await agentTeamRunService.store.completeTeamRun?.({
+    teamId: team._id,
+    projectId: session.projectId,
+    userId,
+    status: teamStatus,
+  })
+  await agentTeamRunService.store.recordEvent({
+    teamId: team._id,
+    taskId: retryTask._id,
+    sessionId: session._id,
+    type: 'agent_task.retry_completed',
+    payload: {
+      sourceTaskId: sourceTask._id.toString(),
+      retryTaskId: retryTask._id.toString(),
+      status: result.status,
     },
   })
+  return result
+}
+
+function summarizeTeamStatusAfterRetry(loaded) {
+  const tasks = loaded?.tasks || []
+  if (tasks.some(task => task.status === 'running' || task.status === 'queued')) {
+    return 'running'
+  }
+  if (tasks.some(task => task.status === 'failed' || task.status === 'timeout')) {
+    return tasks.some(task => task.status === 'completed') ? 'degraded' : 'failed'
+  }
+  return 'completed'
 }
 
 /**
@@ -757,6 +1433,52 @@ async function getAttachment(req, res) {
 }
 
 /**
+ * Download a workspace artifact produced by an AgentLoop tool.
+ */
+async function getSessionArtifact(req, res) {
+  const { sessionId, artifactId } = req.params
+  const userId = req.headers['x-user-id'] || null
+
+  const session = await findSession(sessionId)
+  if (!userId || !session.userId || session.userId !== userId) {
+    return res.status(403).json({ error: 'Access denied' })
+  }
+
+  const artifact = await db.aiSandboxArtifacts.findOne({
+    _id: artifactId,
+    sessionId: session._id.toString(),
+    $or: [
+      { expiresAt: { $exists: false } },
+      { expiresAt: { $gt: new Date() } },
+    ],
+  })
+  if (!artifact) {
+    return res.status(404).json({ error: 'Artifact not found' })
+  }
+
+  const content = Buffer.isBuffer(artifact.content)
+    ? artifact.content
+    : Buffer.from(artifact.content?.buffer || artifact.content || '')
+  const filename = path.basename(artifact.path || 'artifact')
+  const mimeType = inferArtifactMimeType(filename)
+
+  res.setHeader('Content-Type', mimeType)
+  res.setHeader('Content-Length', content.length)
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${encodeURIComponent(filename)}"`
+  )
+  res.send(content)
+}
+
+function inferArtifactMimeType(filename) {
+  if (/\.pdf$/i.test(filename)) return 'application/pdf'
+  if (/\.(log|aux|fls|fdb_latexmk|txt)$/i.test(filename)) return 'text/plain; charset=utf-8'
+  return 'application/octet-stream'
+}
+
+/**
  * Upload a file independently (no session required)
  */
 async function uploadFile(req, res) {
@@ -879,7 +1601,11 @@ async function getFile(req, res) {
 }
 
 /**
- * Delete a session (hard delete)
+ * Archive a session.
+ *
+ * The route remains DELETE for frontend compatibility, but the persistence
+ * semantics are intentionally soft-delete: messages, attachments, and child
+ * sessions remain available for diagnostics while active APIs return 410.
  */
 async function deleteSession(req, res) {
   const { sessionId } = req.params
@@ -887,67 +1613,44 @@ async function deleteSession(req, res) {
   const session = await _loadAndAuthorizeSession(req, res)
   if (!session) return
 
-  // Stop running AgentLoop if active
-  const activeLoop = activeAgentLoops.get(sessionId)
-  if (activeLoop) {
-    try { activeLoop.stop() } catch {}
-    activeAgentLoops.delete(sessionId)
+  await stopActiveSessionTree(session)
+  const childSessions = await db.aiSessions
+    .find(
+      { rootSessionId: session._id, _id: { $ne: session._id } },
+      { projection: { _id: 1 } }
+    )
+    .toArray()
+  const childIds = childSessions.map(s => s._id)
+  for (const childId of childIds) {
+    const childIdString = childId.toString()
+    const childLoop = activeAgentLoops.get(childIdString)
+    if (childLoop) {
+      try { childLoop.stop() } catch {}
+      activeAgentLoops.delete(childIdString)
+    }
+    const childChannel = activeChannels.get(childIdString)
+    if (childChannel) {
+      try { childChannel.abort() } catch {}
+      activeChannels.delete(childIdString)
+    }
   }
 
-  const result = await db.aiSessions.deleteOne({ _id: session._id })
-  if (result.deletedCount === 0) {
+  const now = new Date()
+  const result = await db.aiSessions.updateMany(
+    { _id: { $in: [session._id, ...childIds] } },
+    {
+      $set: {
+        status: 'archived',
+        archivedAt: now,
+        updatedAt: now,
+      },
+    }
+  )
+  if (result.matchedCount === 0) {
     throw new SessionNotFoundError(sessionId)
   }
 
-  // Cascade delete all messages for this session
-  await db.aiMessages.deleteMany({ sessionId: session._id })
-
-  // Cascade delete files (both collections for backward compat)
-  const filesToDelete = [
-    ...(await db.aiFiles.find({ sessionId: session._id }, { projection: { storageKey: 1 } }).toArray()),
-    ...(await db.aiAttachments.find({ sessionId: session._id }, { projection: { storageKey: 1 } }).toArray()),
-  ]
-
-  if (filesToDelete.length > 0) {
-    const userId = req.headers['x-user-id'] || session.userId || null
-    await fileStoreAdapter.deleteSessionAttachments(filesToDelete, userId)
-    await db.aiFiles.deleteMany({ sessionId: session._id })
-    await db.aiAttachments.deleteMany({ sessionId: session._id })
-  }
-
-  // Cascade delete child sessions and their attachments
-  const childSessions = await db.aiSessions.find({ rootSessionId: session._id, _id: { $ne: session._id } }).toArray()
-  if (childSessions.length > 0) {
-    const childIds = childSessions.map(s => s._id)
-    const childUserId = req.headers['x-user-id'] || session.userId || null
-
-    // Delete attachments for child sessions
-    for (const child of childSessions) {
-      // Stop any active child loops
-      const childIdStr = child._id.toString()
-      const childLoop = activeAgentLoops.get(childIdStr)
-      if (childLoop) {
-        try { childLoop.stop() } catch {}
-        activeAgentLoops.delete(childIdStr)
-      }
-
-      const childAttachments = await db.aiAttachments.find({ sessionId: child._id }, { projection: { storageKey: 1 } }).toArray()
-      for (const att of childAttachments) {
-        try { await fileStoreAdapter.deleteAttachment(att.storageKey, childUserId) } catch {}
-      }
-      const childFiles = await db.aiFiles.find({ sessionId: child._id }, { projection: { storageKey: 1 } }).toArray()
-      for (const f of childFiles) {
-        try { await fileStoreAdapter.deleteAttachment(f.storageKey, childUserId) } catch {}
-      }
-    }
-
-    await db.aiAttachments.deleteMany({ sessionId: { $in: childIds } })
-    await db.aiFiles.deleteMany({ sessionId: { $in: childIds } })
-    await db.aiMessages.deleteMany({ sessionId: { $in: childIds } })
-    await db.aiSessions.deleteMany({ _id: { $in: childIds } })
-  }
-
-  logger.info({ sessionId }, 'AI session deleted')
+  logger.info({ sessionId, childCount: childIds.length }, 'AI session archived')
 
   res.status(204).send()
 }
@@ -963,17 +1666,12 @@ async function sendMessage(req, res) {
   }
   const effectiveFileIds = fileIds || attachmentIds
 
-  const requestedSkill = normalizeRequestedSkill(context?.skill)
-
   if (!resume && !content) {
-    // Allow empty content only when a known skill is specified via context
-    if (!requestedSkill) {
-      throw new ValidationError('content is required')
-    }
+    throw new ValidationError('content is required')
   }
 
   const session = await findSession(sessionId, {
-    projection: { _streamingContext: 1, _readDocuments: 1, projectId: 1, userId: 1, rootSessionId: 1, parentId: 1, status: 1, changeHistory: 1, _id: 1 },
+    projection: { _streamingContext: 1, _readDocuments: 1, projectId: 1, userId: 1, rootSessionId: 1, parentId: 1, profile: 1, agentName: 1, status: 1, changeHistory: 1, runtimeMode: 1, model: 1, workspaceId: 1, _id: 1 },
   })
 
   const userId = req.headers['x-user-id']
@@ -1004,13 +1702,12 @@ async function sendMessage(req, res) {
   // Check if streaming requested (via body param or Accept header)
   const isStreamRequested = stream || req.headers.accept?.includes('text/event-stream')
   if (isStreamRequested) {
-    return sendStreamingMessage(req, res, session, content, context, { resume: !!resume, fileIds: effectiveFileIds, requestedSkill, modelSlot })
+    return sendStreamingMessage(req, res, session, content, context, { resume: !!resume, fileIds: effectiveFileIds, modelSlot })
   }
-
-  const effectiveUserId = userId || session.userId || null
 
   // Non-streaming response
   const runBudget = new RunBudget()
+  const messageId = new ObjectId().toString()
 
   // --- Dynamic model resolution ---
   let requestLLMAdapter, modelCapabilities, modelInfoSnapshot
@@ -1035,19 +1732,41 @@ async function sendMessage(req, res) {
     return res.status(500).json({ error: 'NO_MODEL_CONFIGURED', message: 'No model configuration found. Admin must configure models first.' })
   }
 
-  const agentLoop = new AgentLoop({
+  const effectiveUserId = userId || session.userId || null
+  const persistentWorkspace = await ensurePersistentWorkspaceForSession(
+    session,
+    effectiveUserId
+  )
+
+  const agentLoop = createAgentLoopForSession(session, {
     sessionId: session._id.toString(),
     projectId: session.projectId,
     llmAdapter: requestLLMAdapter,
-    toolRegistry,
+    toolRegistry: getScopedToolRegistry(session),
     contextManager,
-    adapters: { document: documentAdapter, project: projectAdapter, llm: requestLLMAdapter, fileStore: fileStoreAdapter },
+    adapters: buildAgentLoopAdapters(requestLLMAdapter),
     // Pass context for current document info
     currentDocId: context?.currentDocId,
     currentDocPath: context?.currentDocPath,
     userId: effectiveUserId,
+    profile: session.profile,
+    agentName: session.agentName,
+    model: session.model || modelInfoSnapshot?.modelName || null,
     runBudget,
   })
+  logger.info(
+    {
+      sessionId: session._id.toString(),
+      projectId: session.projectId,
+      runtimeMode: agentLoop.runtimeMode,
+      agentLoopPath: agentLoop.agentLoopPath,
+      streaming: false,
+      resume: false,
+      parentSessionId: session.parentId?.toString?.() || null,
+      rootSessionId: session.rootSessionId?.toString?.() || session._id.toString(),
+    },
+    'AI agent loop selected'
+  )
 
   // Register in activeAgentLoops for mutual exclusion (same as streaming path)
   activeAgentLoops.set(mutexSessionId, agentLoop)
@@ -1074,11 +1793,10 @@ async function sendMessage(req, res) {
     const enrichedNsContext = {
       ...(context || {}),
       _initialReadDocuments: initialReadDocuments,
-      skill: requestedSkill,
-      _skillRegistry: skillRegistry,
       _fileStoreAdapter: fileStoreAdapter,
       _modelCapabilities: modelCapabilities,
       _userId: effectiveUserId,
+        _persistentWorkspace: persistentWorkspace,
     }
 
     // Load files if provided
@@ -1127,9 +1845,21 @@ async function sendMessage(req, res) {
       } else if (event.type === 'tool_call') {
         if (isMainSession) {
           currentNsTurnToolCalls.push(event.toolCall)
+          await agentMessageStore.startToolCall({
+            sessionId: session._id,
+            messageId,
+            toolCall: event.toolCall,
+            queued: event.queued || false,
+          })
         }
       } else if (event.type === 'tool_result') {
         if (isMainSession) {
+          await agentMessageStore.finishToolCall({
+            sessionId: session._id,
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            result: event.result,
+          })
           toolResults.push({
             toolName: event.toolName,
             success: event.result.success,
@@ -1162,7 +1892,7 @@ async function sendMessage(req, res) {
           finalReadDocuments = event.readDocuments
         }
       }
-      // child_session_init, awaiting_confirmation, change_confirmed, etc. are
+      // awaiting_confirmation, change_confirmed, etc. are
       // silently ignored in non-streaming mode (no confirmation channel)
     }
 
@@ -1192,6 +1922,7 @@ async function sendMessage(req, res) {
       {
         $set: {
           updatedAt: now,
+          lastTurnAt: now,
           ...(finalReadDocuments && finalReadDocuments.size > 0 && {
             _readDocuments: Object.fromEntries(finalReadDocuments),
           }),
@@ -1263,6 +1994,11 @@ async function sendStreamingMessage(req, res, session, content, context, options
     return res.status(500).json({ error: 'NO_MODEL_CONFIGURED', message: 'No model configuration found. Admin must configure models first.' })
   }
 
+  const persistentWorkspace = await ensurePersistentWorkspaceForSession(
+    session,
+    userId
+  )
+
   // Set up SSE headers (must be after mutex check — can't send JSON after SSE headers)
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
@@ -1272,21 +2008,37 @@ async function sendStreamingMessage(req, res, session, content, context, options
   const confirmationChannel = new ConfirmationChannel()
   activeChannels.set(sessionId, confirmationChannel)
 
-  const agentLoop = new AgentLoop({
+  const agentLoop = createAgentLoopForSession(session, {
     sessionId,
     projectId: session.projectId,
     llmAdapter: requestLLMAdapter,
-    toolRegistry,
+    toolRegistry: getScopedToolRegistry(session),
     contextManager,
-    adapters: { document: documentAdapter, project: projectAdapter, llm: requestLLMAdapter, fileStore: fileStoreAdapter },
+    adapters: buildAgentLoopAdapters(requestLLMAdapter),
     currentDocId: context?.currentDocId,
     currentDocPath: context?.currentDocPath,
     userId,
+    profile: session.profile,
+    agentName: session.agentName,
+    model: session.model || modelInfoSnapshot?.modelName || null,
     confirmationChannel,
     rootSessionId: session.rootSessionId?.toString() || sessionId,
     runBudget,
     depth: 0,
   })
+  logger.info(
+    {
+      sessionId,
+      projectId: session.projectId,
+      runtimeMode: agentLoop.runtimeMode,
+      agentLoopPath: agentLoop.agentLoopPath,
+      streaming: true,
+      resume: !!options.resume,
+      parentSessionId: session.parentId?.toString?.() || null,
+      rootSessionId: session.rootSessionId?.toString?.() || sessionId,
+    },
+    'AI agent loop selected'
+  )
 
   activeAgentLoops.set(sessionId, agentLoop)
 
@@ -1302,19 +2054,7 @@ async function sendStreamingMessage(req, res, session, content, context, options
   const messageId = new ObjectId().toString()
   const contentBlocks = []
   const toolCallBlockMap = new Map() // toolCallId -> block reference for O(1) lookup
-  const childContentBlocks = {} // { [childSessionId]: ContentBlock[] }
   let finalReadDocuments = null
-
-  function appendOrMergeChildBlock(sid, type, content) {
-    if (!childContentBlocks[sid]) childContentBlocks[sid] = []
-    const blocks = childContentBlocks[sid]
-    const last = blocks[blocks.length - 1]
-    if (last && last.type === type) {
-      last.content += content
-    } else {
-      blocks.push({ type, content })
-    }
-  }
 
   // Incremental streaming context tracking
   let currentTurnToolCalls = []
@@ -1420,6 +2160,14 @@ async function sendStreamingMessage(req, res, session, content, context, options
         queuedEvents = Math.max(queuedEvents - 1, 0)
       })
   }
+  const heartbeatTimer = setInterval(() => {
+    sendEvent({
+      type: 'heartbeat',
+      timestamp: Date.now(),
+      messageId,
+      sessionId,
+    })
+  }, SSE_HEARTBEAT_MS)
 
   req.on('close', () => {
     connectionAlive = false
@@ -1462,7 +2210,22 @@ async function sendStreamingMessage(req, res, session, content, context, options
       })
       await db.aiSessions.updateOne(
         { _id: session._id },
-        { $set: { _streamingContext: [], updatedAt: new Date() }, $unset: { _streamingInterrupted: '' } }
+        {
+          $set: {
+            _streamingContext: [],
+            activeTurn: {
+              id: messageId,
+              status: 'running',
+              startedAt: new Date(),
+              resumed: false,
+              runtimeMode: agentLoop.runtimeMode,
+              agentLoopPath: agentLoop.agentLoopPath,
+            },
+            updatedAt: new Date(),
+            lastTurnAt: new Date(),
+          },
+          $unset: { _streamingInterrupted: '' },
+        }
       )
       // Refresh TTL for all files associated with this session (both collections)
       const ttlRefresh = { $set: { expiresAt: new Date(Date.now() + REFERENCED_TTL_MS) } }
@@ -1479,6 +2242,22 @@ async function sendStreamingMessage(req, res, session, content, context, options
     } else if (session._streamingContext?.length > 0) {
       // For resume, pre-load existing tool context from _streamingContext
       pushToolContext(toolContextMessages, session._streamingContext)
+      await db.aiSessions.updateOne(
+        { _id: session._id },
+        {
+          $set: {
+            activeTurn: {
+              id: messageId,
+              status: 'running',
+              startedAt: new Date(),
+              resumed: true,
+              runtimeMode: agentLoop.runtimeMode,
+              agentLoopPath: agentLoop.agentLoopPath,
+            },
+            updatedAt: new Date(),
+          },
+        }
+      )
     }
 
     // Load persisted readDocuments into context
@@ -1491,11 +2270,10 @@ async function sendStreamingMessage(req, res, session, content, context, options
     const enrichedRunContext = {
       ...(context || {}),
       _initialReadDocuments: initialReadDocuments,
-      skill: options.requestedSkill || null,
-      _skillRegistry: skillRegistry,
       _fileStoreAdapter: fileStoreAdapter,
       _modelCapabilities: modelCapabilities,
       _userId: userId,
+      _persistentWorkspace: persistentWorkspace,
     }
 
     // Inject pre-loaded files into context
@@ -1530,7 +2308,6 @@ async function sendStreamingMessage(req, res, session, content, context, options
             role: 'assistant',
             content: fullContent,
             contentBlocks: contentBlocks.length > 0 ? contentBlocks : undefined,
-            childSessionParts: Object.keys(childContentBlocks).length > 0 ? childContentBlocks : undefined,
             timestamp: Date.now(),
             interrupted: true,
             modelInfo: modelInfoSnapshot || undefined,
@@ -1547,37 +2324,15 @@ async function sendStreamingMessage(req, res, session, content, context, options
         break
       }
 
-      // Determine if this event is from the main session or a child session
       const eventSessionId = event.sessionId || sessionId
-      const isMainSession = eventSessionId === sessionId
 
       // Transform events to match frontend expected format
-      if (event.type === 'child_session_init') {
-        // Persist the childSessionId link into contentBlocks so the
-        // association survives page refresh (loaded from DB).
-        if (event.toolCallId) {
-          const tcBlock = toolCallBlockMap.get(event.toolCallId)
-          if (tcBlock) {
-            tcBlock.entry.childSessionId = event.childSessionId
-          }
-        }
-        // Metadata event from delegate_task: link child session to its parent tool call
-        sendEvent({
-          type: 'child_session_init',
-          childSessionId: event.childSessionId,
-          agentName: event.agentName,
-          messageId,
-        })
-      } else if (event.type === 'thinking') {
-        if (isMainSession) {
-          const lastBlock = contentBlocks[contentBlocks.length - 1]
-          if (lastBlock && lastBlock.type === 'thinking') {
-            lastBlock.content += event.content
-          } else {
-            contentBlocks.push({ type: 'thinking', content: event.content })
-          }
+      if (event.type === 'thinking') {
+        const lastBlock = contentBlocks[contentBlocks.length - 1]
+        if (lastBlock && lastBlock.type === 'thinking') {
+          lastBlock.content += event.content
         } else {
-          appendOrMergeChildBlock(eventSessionId, 'thinking', event.content)
+          contentBlocks.push({ type: 'thinking', content: event.content })
         }
         sendEvent({
           type: 'thinking_chunk',
@@ -1586,57 +2341,52 @@ async function sendStreamingMessage(req, res, session, content, context, options
           sessionId: eventSessionId,
         })
       } else if (event.type === 'text') {
-        if (isMainSession) {
-          // Guard: stop agent loop if accumulated content exceeds safe limit
-          if (fullContent.length + event.content.length > MAX_MESSAGE_CHARS) {
-            logger.warn(
-              { sessionId, fullContentLength: fullContent.length, chunkLength: event.content.length, limit: MAX_MESSAGE_CHARS },
-              'Streaming content limit exceeded, stopping agent loop'
-            )
-            agentLoop.stop()
-            const limitText = '\n\n[已达到消息内容长度上限，对话已停止。]'
-            fullContent += limitText
-            const lastBlock = contentBlocks[contentBlocks.length - 1]
-            if (lastBlock && lastBlock.type === 'text') {
-              lastBlock.content += limitText
-            } else {
-              contentBlocks.push({ type: 'text', content: limitText })
-            }
-            sendEvent({ type: 'text_chunk', content: limitText, messageId })
-            sendEvent({
-              type: 'conversation_stopped',
-              message: {
-                id: messageId,
-                role: 'assistant',
-                content: fullContent,
-                contentBlocks: contentBlocks.length > 0 ? contentBlocks : undefined,
-                childSessionParts: Object.keys(childContentBlocks).length > 0 ? childContentBlocks : undefined,
-                timestamp: Date.now(),
-                interrupted: true,
-                modelInfo: modelInfoSnapshot || undefined,
-              },
-              usage: null,
-              runBudgetSummary: {
-                llmCalls: runBudget.llmCalls,
-                toolCalls: runBudget.toolCalls,
-                delegations: runBudget.delegations,
-                totalTokens: runBudget.totalTokens,
-                wallTimeMs: runBudget.getElapsedWallTimeMs(),
-              },
-            })
-            break
-          }
-          fullContent += event.content
-          currentTurnAssistantContent += event.content
-          // Maintain contentBlocks for interleaved rendering
+        // Guard: stop agent loop if accumulated content exceeds safe limit
+        if (fullContent.length + event.content.length > MAX_MESSAGE_CHARS) {
+          logger.warn(
+            { sessionId, fullContentLength: fullContent.length, chunkLength: event.content.length, limit: MAX_MESSAGE_CHARS },
+            'Streaming content limit exceeded, stopping agent loop'
+          )
+          agentLoop.stop()
+          const limitText = '\n\n[已达到消息内容长度上限，对话已停止。]'
+          fullContent += limitText
           const lastBlock = contentBlocks[contentBlocks.length - 1]
           if (lastBlock && lastBlock.type === 'text') {
-            lastBlock.content += event.content
+            lastBlock.content += limitText
           } else {
-            contentBlocks.push({ type: 'text', content: event.content })
+            contentBlocks.push({ type: 'text', content: limitText })
           }
+          sendEvent({ type: 'text_chunk', content: limitText, messageId })
+          sendEvent({
+            type: 'conversation_stopped',
+            message: {
+              id: messageId,
+              role: 'assistant',
+              content: fullContent,
+              contentBlocks: contentBlocks.length > 0 ? contentBlocks : undefined,
+              timestamp: Date.now(),
+              interrupted: true,
+              modelInfo: modelInfoSnapshot || undefined,
+            },
+            usage: null,
+            runBudgetSummary: {
+              llmCalls: runBudget.llmCalls,
+              toolCalls: runBudget.toolCalls,
+              delegations: runBudget.delegations,
+              totalTokens: runBudget.totalTokens,
+              wallTimeMs: runBudget.getElapsedWallTimeMs(),
+            },
+          })
+          break
+        }
+        fullContent += event.content
+        currentTurnAssistantContent += event.content
+        // Maintain contentBlocks for interleaved rendering
+        const lastBlock = contentBlocks[contentBlocks.length - 1]
+        if (lastBlock && lastBlock.type === 'text') {
+          lastBlock.content += event.content
         } else {
-          appendOrMergeChildBlock(eventSessionId, 'text', event.content)
+          contentBlocks.push({ type: 'text', content: event.content })
         }
         sendEvent({
           type: 'text_chunk',
@@ -1645,39 +2395,28 @@ async function sendStreamingMessage(req, res, session, content, context, options
           sessionId: eventSessionId,
         })
       } else if (event.type === 'tool_call') {
-        if (isMainSession) {
-          currentTurnToolCalls.push(event.toolCall)
-          // Collect tool call entry for persistence
-          let parsedArgs = {}
-          try {
-            parsedArgs = JSON.parse(event.toolCall.function?.arguments || '{}')
-          } catch {
-            // ignore parse errors
-          }
-          const tcEntry = {
-            id: event.toolCall.id,
-            tool: event.toolCall.function?.name || 'unknown',
-            arguments: parsedArgs,
-            status: event.queued ? 'queued' : 'running',
-          }
-          contentBlocks.push({ type: 'tool_call', entry: { ...tcEntry } })
-          toolCallBlockMap.set(tcEntry.id, contentBlocks[contentBlocks.length - 1])
-        } else {
-          if (!childContentBlocks[eventSessionId]) childContentBlocks[eventSessionId] = []
-          let parsedArgs = {}
-          try {
-            parsedArgs = JSON.parse(event.toolCall.function?.arguments || '{}')
-          } catch {}
-          childContentBlocks[eventSessionId].push({
-            type: 'tool_call',
-            entry: {
-              id: event.toolCall.id,
-              tool: event.toolCall.function?.name || 'unknown',
-              arguments: parsedArgs,
-              status: event.queued ? 'queued' : 'running',
-            },
-          })
+        currentTurnToolCalls.push(event.toolCall)
+        await agentMessageStore.startToolCall({
+          sessionId: session._id,
+          messageId,
+          toolCall: event.toolCall,
+          queued: event.queued || false,
+        })
+        // Collect tool call entry for persistence
+        let parsedArgs = {}
+        try {
+          parsedArgs = JSON.parse(event.toolCall.function?.arguments || '{}')
+        } catch {
+          // ignore parse errors
         }
+        const tcEntry = {
+          id: event.toolCall.id,
+          tool: event.toolCall.function?.name || 'unknown',
+          arguments: parsedArgs,
+          status: event.queued ? 'queued' : 'running',
+        }
+        contentBlocks.push({ type: 'tool_call', entry: { ...tcEntry } })
+        toolCallBlockMap.set(tcEntry.id, contentBlocks[contentBlocks.length - 1])
         sendEvent({
           type: 'tool_call',
           toolCall: event.toolCall,
@@ -1686,54 +2425,48 @@ async function sendStreamingMessage(req, res, session, content, context, options
           queued: event.queued || false,
         })
       } else if (event.type === 'tool_call_start') {
-        if (isMainSession) {
-          const tcBlock = toolCallBlockMap.get(event.toolCallId)
-          if (tcBlock) tcBlock.entry.status = 'running'
-        } else {
-          const childBlocks = childContentBlocks[eventSessionId]
-          if (childBlocks) {
-            const tcBlock = childBlocks.find(
-              b => b.type === 'tool_call' && b.entry.id === event.toolCallId
-            )
-            if (tcBlock) tcBlock.entry.status = 'running'
-          }
-        }
+        await agentMessageStore.markToolCallRunning({
+          sessionId: session._id,
+          toolCallId: event.toolCallId,
+        })
+        const tcBlock = toolCallBlockMap.get(event.toolCallId)
+        if (tcBlock) tcBlock.entry.status = 'running'
         sendEvent({
           type: 'tool_call_start',
           toolCallId: event.toolCallId,
           messageId,
           sessionId: eventSessionId,
         })
+      } else if (event.type === 'agent_team.started') {
+        sendEvent({
+          type: 'agent_team.started',
+          teamId: event.teamId,
+          workflowType: event.workflowType,
+          mode: event.mode,
+          status: event.status,
+          messageId,
+          sessionId: event.sessionId || eventSessionId,
+        })
       } else if (event.type === 'tool_result') {
-        if (isMainSession) {
-          // Collect tool result for streaming context
-          currentTurnToolResults.push({
-            toolCallId: event.toolCallId,
-            content: event.result.output || JSON.stringify(event.result),
-          })
+        await agentMessageStore.finishToolCall({
+          sessionId: session._id,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          result: event.result,
+        })
+        // Collect tool result for streaming context
+        currentTurnToolResults.push({
+          toolCallId: event.toolCallId,
+          content: event.result.output || JSON.stringify(event.result),
+        })
 
-          // Update contentBlocks tool_call entry
-          const tcBlock = toolCallBlockMap.get(event.toolCallId)
-          if (tcBlock) {
-            tcBlock.entry.status = event.result.success ? 'completed' : 'error'
-            tcBlock.entry.result = {
-              data: event.result.data,
-              error: event.result.error,
-            }
-          }
-        } else {
-          const childBlocks = childContentBlocks[eventSessionId]
-          if (childBlocks) {
-            const tcBlock = childBlocks.find(
-              b => b.type === 'tool_call' && b.entry.id === event.toolCallId
-            )
-            if (tcBlock) {
-              tcBlock.entry.status = event.result.success ? 'completed' : 'error'
-              tcBlock.entry.result = {
-                data: event.result.data,
-                error: event.result.error,
-              }
-            }
+        // Update contentBlocks tool_call entry
+        const tcBlock = toolCallBlockMap.get(event.toolCallId)
+        if (tcBlock) {
+          tcBlock.entry.status = event.result.success ? 'completed' : 'error'
+          tcBlock.entry.result = {
+            data: event.result.data,
+            error: event.result.error,
           }
         }
         sendEvent({
@@ -1748,7 +2481,7 @@ async function sendStreamingMessage(req, res, session, content, context, options
         })
 
         // Check if a complete main-session tool call cycle is done
-        if (isMainSession && currentTurnToolCalls.length > 0 && currentTurnToolResults.length === currentTurnToolCalls.length) {
+        if (currentTurnToolCalls.length > 0 && currentTurnToolResults.length === currentTurnToolCalls.length) {
           const contextMessages = []
           contextMessages.push({
             role: 'assistant',
@@ -1785,6 +2518,40 @@ async function sendStreamingMessage(req, res, session, content, context, options
           currentTurnToolCalls = []
           currentTurnToolResults = []
         }
+      } else if (event.type === 'draft_change.created') {
+        sendEvent({
+          ...event,
+          messageId,
+          sessionId: eventSessionId,
+        })
+      } else if (
+        event.type === 'canonical_change.applying' ||
+        event.type === 'canonical_change.applied' ||
+        event.type === 'draft_change.accepted' ||
+        event.type === 'draft_change.conflict'
+      ) {
+        sendEvent({
+          ...event,
+          messageId,
+          sessionId: eventSessionId,
+        })
+      } else if (
+        event.type === 'command.started' ||
+        event.type === 'command.output' ||
+        event.type === 'command.completed' ||
+        event.type === 'command.failed' ||
+        event.type === 'security.command_blocked' ||
+        event.type === 'workspace.file_written' ||
+        event.type === 'skill.activated' ||
+        event.type === 'skill.reference.loaded' ||
+        event.type === 'skill.script.started' ||
+        event.type === 'skill.script.completed'
+      ) {
+        sendEvent({
+          ...event,
+          messageId,
+          sessionId: eventSessionId,
+        })
       } else if (event.type === 'awaiting_confirmation') {
         // Synchronous confirmation: send change to frontend for user review
         sendEvent({
@@ -1838,53 +2605,45 @@ async function sendStreamingMessage(req, res, session, content, context, options
           { $set: { 'changeHistory.$.status': event.action === 'accept' ? 'accepted' : 'rejected' } }
         )
       } else if (event.type === 'done') {
-        // Only handle 'done' from main session (child 'done' events are internal)
-        if (isMainSession) {
-          if (event.readDocuments) {
-            finalReadDocuments = event.readDocuments
-          }
-          const hasChildContent = Object.keys(childContentBlocks).length > 0
-          const compactionConfig = settings.compaction || {}
-          sendEvent({
-            type: 'message_complete',
-            message: {
-              id: messageId,
-              role: 'assistant',
-              content: fullContent,
-              contentBlocks: contentBlocks.length > 0 ? contentBlocks : undefined,
-              childSessionParts: hasChildContent ? childContentBlocks : undefined,
-              timestamp: Date.now(),
-              modelInfo: modelInfoSnapshot || undefined,
-            },
-            usage: event.usage || null,
-            runBudgetSummary: event.runBudgetSummary || null,
-            compaction: {
-              contextWindow: compactionConfig.contextWindow || 131072,
-              threshold: compactionConfig.threshold || 0.7,
-            },
-          })
+        if (event.readDocuments) {
+          finalReadDocuments = event.readDocuments
         }
+        const compactionConfig = settings.compaction || {}
+        sendEvent({
+          type: 'message_complete',
+          message: {
+            id: messageId,
+            role: 'assistant',
+            content: fullContent,
+            contentBlocks: contentBlocks.length > 0 ? contentBlocks : undefined,
+            timestamp: Date.now(),
+            modelInfo: modelInfoSnapshot || undefined,
+          },
+          usage: event.usage || null,
+          runBudgetSummary: event.runBudgetSummary || null,
+          compaction: {
+            contextWindow: compactionConfig.contextWindow || 131072,
+            threshold: compactionConfig.threshold || 0.7,
+          },
+        })
       } else if (event.type === 'stopped') {
-        if (isMainSession) {
-          if (event.readDocuments) {
-            finalReadDocuments = event.readDocuments
-          }
-          sendEvent({
-            type: 'conversation_stopped',
-            message: {
-              id: messageId,
-              role: 'assistant',
-              content: fullContent,
-              contentBlocks: contentBlocks.length > 0 ? contentBlocks : undefined,
-              childSessionParts: Object.keys(childContentBlocks).length > 0 ? childContentBlocks : undefined,
-              timestamp: Date.now(),
-              interrupted: true,
-              modelInfo: modelInfoSnapshot || undefined,
-            },
-            usage: event.usage || null,
-            runBudgetSummary: event.runBudgetSummary || null,
-          })
+        if (event.readDocuments) {
+          finalReadDocuments = event.readDocuments
         }
+        sendEvent({
+          type: 'conversation_stopped',
+          message: {
+            id: messageId,
+            role: 'assistant',
+            content: fullContent,
+            contentBlocks: contentBlocks.length > 0 ? contentBlocks : undefined,
+            timestamp: Date.now(),
+            interrupted: true,
+            modelInfo: modelInfoSnapshot || undefined,
+          },
+          usage: event.usage || null,
+          runBudgetSummary: event.runBudgetSummary || null,
+        })
       } else if (event.type === 'compaction_start') {
         sendEvent({ type: 'compaction_start', messageId })
       } else if (event.type === 'compaction_done') {
@@ -1914,7 +2673,6 @@ async function sendStreamingMessage(req, res, session, content, context, options
       role: 'assistant',
       content: fullContent,
       contentBlocks: contentBlocks.length > 0 ? contentBlocks : undefined,
-      childSessionParts: Object.keys(childContentBlocks).length > 0 ? childContentBlocks : undefined,
       toolContext: toolContextMessages.length > 0 ? toolContextMessages : undefined,
       interrupted: (streamInterrupted || agentLoop.stopRequested) ? true : undefined,
       modelInfo: modelInfoSnapshot || undefined,
@@ -1924,6 +2682,18 @@ async function sendStreamingMessage(req, res, session, content, context, options
     try {
       await txnSession.withTransaction(async () => {
         await db.aiMessages.insertOne(assistantDoc, { session: txnSession })
+        const latestTurnSession = await db.aiSessions.findOne(
+          { _id: session._id },
+          {
+            projection: { activeTurn: 1 },
+            session: txnSession,
+          }
+        )
+        const currentTurn = latestTurnSession?.activeTurn || {}
+        const currentTurnStatus = currentTurn.status || null
+        const preserveStoppedTurn = currentTurnStatus === 'stopped'
+        const preserveInterruptedTurn =
+          currentTurnStatus === 'interrupted' && currentTurn.reason !== 'client_disconnected'
         // When stream was interrupted (client disconnect OR server-side disconnect
         // like SSE queue limit, backpressure, drain timeout, or res error),
         // preserve _streamingContext and mark as interrupted so resume can
@@ -1938,21 +2708,47 @@ async function sendStreamingMessage(req, res, session, content, context, options
             {
               $set: {
                 updatedAt: new Date(),
-                _streamingInterrupted: true,
+                lastTurnAt: new Date(),
+                ...(preserveStoppedTurn
+                  ? {}
+                  : {
+                      _streamingInterrupted: true,
+                      ...(preserveInterruptedTurn
+                        ? {}
+                        : {
+                            'activeTurn.status': 'interrupted',
+                            'activeTurn.reason': disconnectedByClient ? 'client_disconnected' : 'stream_interrupted',
+                            'activeTurn.interruptedAt': new Date(),
+                          }),
+                    }),
                 ...(finalReadDocuments && finalReadDocuments.size > 0 && {
                   _readDocuments: Object.fromEntries(finalReadDocuments),
                 }),
               },
+              ...(preserveStoppedTurn ? { $unset: { _streamingContext: '', _streamingInterrupted: '' } } : {}),
             },
             { session: txnSession }
           )
         } else {
+          const completedTurnPatch = agentLoop.stopRequested
+            ? (
+                preserveInterruptedTurn
+                  ? {}
+                  : {
+                      'activeTurn.status': 'stopped',
+                      'activeTurn.reason': 'user_stop',
+                      'activeTurn.stoppedAt': new Date(),
+                    }
+              )
+            : { 'activeTurn.status': 'completed', 'activeTurn.completedAt': new Date() }
           await db.aiSessions.updateOne(
             { _id: session._id },
             {
               $unset: { _streamingContext: '', _streamingInterrupted: '' },
               $set: {
                 updatedAt: new Date(),
+                lastTurnAt: new Date(),
+                ...completedTurnPatch,
                 ...(finalReadDocuments && finalReadDocuments.size > 0 && {
                   _readDocuments: Object.fromEntries(finalReadDocuments),
                 }),
@@ -1967,6 +2763,7 @@ async function sendStreamingMessage(req, res, session, content, context, options
     }
   } catch (error) {
     logger.error({ err: error, sessionId }, 'Streaming error')
+    await agentMessageStore.markTurnFailed({ sessionId: session._id, error })
     const safeMessage = (error.status && error.status < 500)
       ? error.message
       : 'Internal error'
@@ -1978,6 +2775,7 @@ async function sendStreamingMessage(req, res, session, content, context, options
       },
     })
   } finally {
+    clearInterval(heartbeatTimer)
     confirmationChannel.abort()
     activeChannels.delete(sessionId)
     activeAgentLoops.delete(sessionId)
@@ -2004,13 +2802,63 @@ async function stopSession(req, res) {
   const session = await _loadAndAuthorizeSession(req, res)
   if (!session) return
 
-  const agentLoop = activeAgentLoops.get(sessionId)
-  if (!agentLoop) {
+  const stoppedSessionIds = await stopActiveSessionTree(session)
+  if (!stoppedSessionIds.length) {
+    await markSessionStopped(session._id)
     return res.json({ success: true, message: 'No active agent loop' })
   }
-  agentLoop.stop()
+  await markSessionStopped(session._id)
   logger.info({ sessionId }, 'Stop requested for agent loop')
   res.json({ success: true })
+}
+
+async function stopActiveSessionTree(session) {
+  const childSessions = await db.aiSessions
+    .find(
+      { rootSessionId: session._id, _id: { $ne: session._id } },
+      { projection: { _id: 1 } }
+    )
+    .toArray()
+  const sessionIds = [session._id, ...childSessions.map(item => item._id)]
+  const stoppedSessionIds = await stopActiveSessionsById(sessionIds)
+  if (stoppedSessionIds.length) {
+    await markSessionStopped(session._id)
+  }
+  return stoppedSessionIds
+}
+
+async function stopActiveSessionsById(sessionObjectIds = []) {
+  const stoppedSessionIds = []
+  for (const sessionObjectId of sessionObjectIds) {
+    const sessionId = sessionObjectId.toString()
+    const activeLoop = activeAgentLoops.get(sessionId)
+    if (activeLoop) {
+      try { activeLoop.stop() } catch {}
+      activeAgentLoops.delete(sessionId)
+      stoppedSessionIds.push(sessionId)
+    }
+    const channel = activeChannels.get(sessionId)
+    if (channel) {
+      try { channel.abort() } catch {}
+      activeChannels.delete(sessionId)
+    }
+  }
+  return stoppedSessionIds
+}
+
+async function markSessionStopped(sessionObjectId) {
+  await db.aiSessions.updateOne(
+    { _id: sessionObjectId },
+    {
+      $set: {
+        'activeTurn.status': 'stopped',
+        'activeTurn.reason': 'user_stop',
+        'activeTurn.stoppedAt': new Date(),
+        updatedAt: new Date(),
+      },
+      $unset: { _streamingInterrupted: '' },
+    }
+  )
 }
 
 /**
@@ -2171,6 +3019,10 @@ async function acceptChange(req, res) {
         message: 'Change is no longer in pending status (may have been accepted or rejected by another request)',
       })
     }
+    await syncDraftBackedChangeStatus(change, session, 'accepted', {
+      appliedVersion: result.newVersion,
+      wasRebased: result.wasRebased,
+    })
 
     logger.info(
       { sessionId, changeId, wasRebased: result.wasRebased },
@@ -2210,6 +3062,10 @@ async function acceptChange(req, res) {
           },
         }
       )
+      await syncDraftBackedChangeStatus(change, session, 'conflict', {
+        conflictType: error.info?.conflictType || 'UNKNOWN',
+        conflictMessage: error.message,
+      })
 
       logger.warn(
         { sessionId, changeId, conflictType: error.info?.conflictType, err: error },
@@ -2221,6 +3077,13 @@ async function acceptChange(req, res) {
         error: 'REBASE_CONFLICT',
         message: error.message,
         conflictType: error.info?.conflictType,
+        change: {
+          ...change,
+          status: 'conflict',
+          conflictType: error.info?.conflictType || 'UNKNOWN',
+          conflictMessage: error.message,
+          stale: true,
+        },
         suggestion: 'Please regenerate the edit based on current document content',
       })
     }
@@ -2289,6 +3152,9 @@ async function rejectChange(req, res) {
       message: 'Change is no longer in a rejectable status (may have been accepted or rejected by another request)',
     })
   }
+  await syncDraftBackedChangeStatus(change, session, 'rejected', {
+    rejectReason: reason,
+  })
 
   logger.info({ sessionId, changeId, reason }, 'Change rejected')
 
@@ -2583,7 +3449,8 @@ async function compactSession(req, res) {
   const result = await contextManager.compactHistory(
     session._id.toString(),
     compactionAdapter,
-    compactionConfig
+    compactionConfig,
+    { proposeMemorySuggestions: true }
   )
 
   if (result.success) {
@@ -2624,67 +3491,227 @@ async function searchFiles(req, res) {
   res.json({ files: results })
 }
 
-/**
- * Get project rules
- */
-async function getProjectRules(req, res) {
+async function getAgentInstructions(req, res) {
   const { projectId } = req.params
-
   const userId = req.headers['x-user-id']
+  const agentContext = getEnabledAgentContextConfig()
+
   if (!await _checkProjectAccess(projectId, userId)) {
     return res.status(403).json({ error: 'Access denied' })
   }
 
-  const doc = await db.aiProjectRules.findOne(
-    { projectId },
-    { projection: { content: 1, updatedAt: 1 } }
-  )
-  const maxLen = settings.memory?.maxRulesLength || 10000
+  const service = createProjectInstructionService(agentContext)
+  const instructions = await service.getInstructions({ projectId })
   res.json({
-    content: doc?.content || '',
-    updatedAt: doc?.updatedAt || null,
-    maxLength: maxLen,
+    ...instructions,
+    maxLength: agentContext.maxInstructionChars,
   })
 }
 
-/**
- * Update project rules
- */
-async function updateProjectRules(req, res) {
+async function createAgentInstructions(req, res) {
   const { projectId } = req.params
-  const { content } = req.body
-  const userId = req.headers['x-user-id'] || null
-  const maxLen = settings.memory?.maxRulesLength || 10000
+  const userId = req.headers['x-user-id']
+  const { content = '' } = req.body || {}
+  const agentContext = getEnabledAgentContextConfig()
 
   if (!await _checkProjectWriteAccess(projectId, userId)) {
-    return res.status(403).json({ error: 'Write access required to update project rules' })
+    return res.status(403).json({ error: 'Write access required to create project instructions' })
   }
 
-  if (typeof content !== 'string') {
-    throw new ValidationError('content must be a string')
+  const service = createProjectInstructionService(agentContext)
+  const instructions = await service.createInstructions({
+    projectId,
+    userId,
+    content,
+  })
+  res.status(201).json({
+    ...instructions,
+    maxLength: agentContext.maxInstructionChars,
+  })
+}
+
+async function saveAgentInstructionsDraft(req, res) {
+  const { projectId } = req.params
+  const userId = req.headers['x-user-id']
+  const { sessionId, docId, baseVersion, content, mode } = req.body || {}
+  const agentContext = getEnabledAgentContextConfig()
+
+  if (!await _checkProjectWriteAccess(projectId, userId)) {
+    return res.status(403).json({ error: 'Write access required to update project instructions' })
   }
-  if (content.length > maxLen) {
-    throw new ValidationError(`content exceeds maximum length of ${maxLen}`)
+  if (typeof sessionId !== 'string' || sessionId.length === 0) {
+    throw new ValidationError('sessionId is required')
   }
 
-  const now = new Date()
-  await db.aiProjectRules.updateOne(
-    { projectId },
-    {
-      $set: { content, updatedBy: userId, updatedAt: now },
-      $setOnInsert: { createdAt: now },
-    },
-    { upsert: true }
-  )
+  const session = await findSession(sessionId)
+  if (!session.userId || session.userId !== userId || session.projectId !== projectId) {
+    return res.status(403).json({ error: 'Session does not belong to this project and user' })
+  }
 
-  // Clear promptSnapshot for all active sessions of this project so rules
-  // take effect on the next message without requiring a new session.
-  await db.aiSessions.updateMany(
-    { projectId, status: 'active' },
-    { $unset: { promptSnapshot: '' } }
-  )
+  const service = createProjectInstructionService(agentContext)
+  const result = await service.saveDraft({
+    sessionId,
+    projectId,
+    userId,
+    docId,
+    baseVersion,
+    content,
+    mode,
+  })
+  res.json(result)
+}
 
-  res.json({ success: true })
+async function listMemories(req, res) {
+  const userId = req.headers['x-user-id']
+  const { projectId, scope = 'all' } = req.query
+  const agentContext = getEnabledAgentContextConfig()
+
+  if (projectId && !await _checkProjectAccess(projectId, userId)) {
+    return res.status(403).json({ error: 'Access denied' })
+  }
+  if (!['global', 'project', 'all'].includes(scope)) {
+    throw new ValidationError('Invalid memory scope')
+  }
+
+  const memories = await createMemoryService(agentContext).listMemories({
+    userId,
+    projectId: typeof projectId === 'string' ? projectId : null,
+    scope,
+    includeDisabled: req.query.includeDisabled === 'true',
+  })
+  res.json({
+    memories: memories.map(serializeMemory),
+    maxLength: agentContext.maxMemoryChars,
+  })
+}
+
+async function createMemory(req, res) {
+  const userId = req.headers['x-user-id']
+  const { content, scope = 'global', projectId, tags } = req.body || {}
+  const agentContext = getEnabledAgentContextConfig()
+
+  if (scope === 'project') {
+    if (!projectId) throw new ValidationError('projectId is required for project-scoped memory')
+    if (!await _checkProjectWriteAccess(projectId, userId)) {
+      return res.status(403).json({ error: 'Write access required to create project memory' })
+    }
+  }
+
+  const memory = await createMemoryService(agentContext).createMemory({
+    userId,
+    projectId,
+    scope,
+    content,
+    source: 'manual',
+    tags,
+  })
+  res.status(201).json({ memory: serializeMemory(memory) })
+}
+
+async function updateMemory(req, res) {
+  const userId = req.headers['x-user-id']
+  const { memoryId } = req.params
+  const agentContext = getEnabledAgentContextConfig()
+  const memory = await createMemoryService(agentContext).updateMemory({
+    memoryId: parseObjectId(memoryId, 'memoryId'),
+    userId,
+    content: req.body?.content,
+    status: req.body?.status,
+  })
+  res.json({ memory: serializeMemory(memory) })
+}
+
+async function deleteMemory(req, res) {
+  const userId = req.headers['x-user-id']
+  const { memoryId } = req.params
+  const agentContext = getEnabledAgentContextConfig()
+  const memory = await createMemoryService(agentContext).deleteMemory({
+    memoryId: parseObjectId(memoryId, 'memoryId'),
+    userId,
+  })
+  res.json({ memory: serializeMemory(memory) })
+}
+
+async function listMemorySuggestions(req, res) {
+  const userId = req.headers['x-user-id']
+  const { projectId, status = 'pending' } = req.query
+  const agentContext = getEnabledAgentContextConfig()
+
+  if (projectId && !await _checkProjectAccess(projectId, userId)) {
+    return res.status(403).json({ error: 'Access denied' })
+  }
+
+  const suggestions = await createMemorySuggestionService(agentContext)
+    .listSuggestions({
+      userId,
+      projectId: typeof projectId === 'string' ? projectId : null,
+      status,
+    })
+  res.json({ suggestions: suggestions.map(serializeMemorySuggestion) })
+}
+
+async function acceptMemorySuggestion(req, res) {
+  const userId = req.headers['x-user-id']
+  const { suggestionId } = req.params
+  const agentContext = getEnabledAgentContextConfig()
+  const result = await createMemorySuggestionService(agentContext)
+    .acceptSuggestion({
+      suggestionId: parseObjectId(suggestionId, 'suggestionId'),
+      userId,
+    })
+  res.json({
+    suggestion: serializeMemorySuggestion(result.suggestion),
+    memory: serializeMemory(result.memory),
+  })
+}
+
+async function dismissMemorySuggestion(req, res) {
+  const userId = req.headers['x-user-id']
+  const { suggestionId } = req.params
+  const agentContext = getEnabledAgentContextConfig()
+  const suggestion = await createMemorySuggestionService(agentContext)
+    .dismissSuggestion({
+      suggestionId: parseObjectId(suggestionId, 'suggestionId'),
+      userId,
+    })
+  res.json({ suggestion: serializeMemorySuggestion(suggestion) })
+}
+
+async function getContextSnapshot(req, res) {
+  const { sessionId, turnId } = req.params
+  const userId = req.headers['x-user-id']
+  getEnabledAgentContextConfig()
+  const session = await findSession(sessionId, { allowTerminal: true })
+  if (!session.userId || session.userId !== userId) {
+    return res.status(403).json({ error: 'Access denied' })
+  }
+  if (!await _checkProjectAccess(session.projectId, userId)) {
+    return res.status(403).json({ error: 'Access to project denied' })
+  }
+  const snapshot = await new ContextSnapshotService().findSnapshot({
+    sessionId,
+    userId,
+    turnId,
+  })
+  res.json({ snapshot: serializeContextSnapshot(snapshot) })
+}
+
+async function getSessionSummary(req, res) {
+  const { sessionId } = req.params
+  const userId = req.headers['x-user-id']
+  getEnabledAgentContextConfig()
+  const session = await findSession(sessionId, { allowTerminal: true })
+  if (!session.userId || session.userId !== userId) {
+    return res.status(403).json({ error: 'Access denied' })
+  }
+  if (!await _checkProjectAccess(session.projectId, userId)) {
+    return res.status(403).json({ error: 'Access to project denied' })
+  }
+  const summary = await new SessionSummaryService().findLatestSummary({
+    sessionId,
+    userId,
+  })
+  res.json({ summary: serializeSessionSummaryRecord(summary) })
 }
 
 /**
@@ -2859,6 +3886,10 @@ async function findSession(sessionId, options = {}) {
     throw new SessionNotFoundError(sessionId)
   }
 
+  if (!options.allowTerminal && isTerminalSessionStatus(session.status)) {
+    throw new SessionExpiredError(sessionId)
+  }
+
   return session
 }
 
@@ -2868,6 +3899,10 @@ export default {
   createSession: expressify(createSession),
   listSessions: expressify(listSessions),
   getSession: expressify(getSession),
+  listTeamRuns: expressify(listTeamRuns),
+  getTeamRun: expressify(getTeamRun),
+  cancelTeamRun: expressify(cancelTeamRun),
+  retryTeamRunTask: expressify(retryTeamRunTask),
   updateSession: expressify(updateSession),
   deleteSession: expressify(deleteSession),
   sendMessage: expressify(sendMessage),
@@ -2875,6 +3910,7 @@ export default {
   confirmChange: expressify(confirmChange),
   uploadAttachment: expressify(uploadAttachment),
   getAttachment: expressify(getAttachment),
+  getSessionArtifact: expressify(getSessionArtifact),
   uploadFile: expressify(uploadFile),
   getFile: expressify(getFile),
   acceptChange: expressify(acceptChange),
@@ -2883,11 +3919,22 @@ export default {
   rejectAllChanges: expressify(rejectAllChanges),
   searchFiles: expressify(searchFiles),
   compactSession: expressify(compactSession),
-  getProjectRules: expressify(getProjectRules),
-  updateProjectRules: expressify(updateProjectRules),
+  getAgentInstructions: expressify(getAgentInstructions),
+  createAgentInstructions: expressify(createAgentInstructions),
+  saveAgentInstructionsDraft: expressify(saveAgentInstructionsDraft),
+  listMemories: expressify(listMemories),
+  createMemory: expressify(createMemory),
+  updateMemory: expressify(updateMemory),
+  deleteMemory: expressify(deleteMemory),
+  listMemorySuggestions: expressify(listMemorySuggestions),
+  acceptMemorySuggestion: expressify(acceptMemorySuggestion),
+  dismissMemorySuggestion: expressify(dismissMemorySuggestion),
+  getContextSnapshot: expressify(getContextSnapshot),
+  getSessionSummary: expressify(getSessionSummary),
   getCompletionRules: expressify(getCompletionRules),
   updateCompletionRules: expressify(updateCompletionRules),
   // Internal helpers (not Express routes)
   createChildSession,
   updateSessionStatus,
+  reconcileInterruptedTurns,
 }

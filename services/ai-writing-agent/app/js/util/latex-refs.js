@@ -36,18 +36,6 @@ function lineAtOffset(lineStarts, offset) {
 }
 
 /**
- * Compute 1-based line number from content and match index.
- * Kept for backward compatibility but prefer buildLineIndex + lineAtOffset
- * for multiple lookups.
- * @param {string} content
- * @param {number} index
- * @returns {number}
- */
-function lineAt(content, index) {
-  return content.substring(0, index).split('\n').length
-}
-
-/**
  * Pre-compute all verbatim environment and \verb command zones as [start, end] intervals.
  * Returns a sorted array of zones suitable for binary search with isInZone().
  * @param {string} content
@@ -124,44 +112,6 @@ export function isCommented(content, index) {
     }
   }
   return false
-}
-
-/**
- * Check if a match position is inside a verbatim-like environment
- * (verbatim, lstlisting, minted, Verbatim) or a \verb|...| command.
- * @param {string} content
- * @param {number} index - Match start index
- * @returns {boolean}
- */
-function isInVerbatim(content, index) {
-  // Check for \verb|...|  (\verb followed by a delimiter char, ending at matching delimiter)
-  // Also matches \verb* variant — cannot cross lines
-  const verbRe = /\\verb\*?([^a-zA-Z\s])([^\n]*?)\1/g
-  let m
-  while ((m = verbRe.exec(content)) !== null) {
-    if (m.index > index) break
-    if (index >= m.index && index < m.index + m[0].length) return true
-  }
-
-  // Check for verbatim-like environments
-  const envNames = 'verbatim|lstlisting|minted|Verbatim'
-  const envRe = new RegExp(`\\\\begin\\{(${envNames})\\*?\\}([\\s\\S]*?)\\\\end\\{\\1\\*?\\}`, 'g')
-  while ((m = envRe.exec(content)) !== null) {
-    if (m.index > index) break
-    if (index >= m.index && index < m.index + m[0].length) return true
-  }
-
-  return false
-}
-
-/**
- * Check if a match should be excluded (commented or in verbatim).
- * @param {string} content
- * @param {number} index
- * @returns {boolean}
- */
-function isExcluded(content, index) {
-  return isCommented(content, index) || isInVerbatim(content, index)
 }
 
 /**

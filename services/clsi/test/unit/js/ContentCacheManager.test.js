@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import Path from 'node:path'
+import os from 'node:os'
 import { beforeAll, describe, expect, it } from 'vitest'
 
 const MODULE_PATH = '../../../app/js/ContentCacheManager'
@@ -36,12 +37,16 @@ describe('ContentCacheManager', function () {
     }
   }
   beforeAll(function () {
+    const outputRoot = Path.join(
+      os.tmpdir(),
+      `clsi-content-cache-test-${process.pid}`
+    )
     contentDir =
-      '/overleaf/services/clsi/output/602cee6f6460fca0ba7921e6/content/1797a7f48f9-5abc1998509dea1f'
+      `${outputRoot}/602cee6f6460fca0ba7921e6/content/1797a7f48f9-5abc1998509dea1f`
     pdfPath =
-      '/overleaf/services/clsi/output/602cee6f6460fca0ba7921e6/generated-files/1797a7f48ea-8ac6805139f43351/output.pdf'
+      `${outputRoot}/602cee6f6460fca0ba7921e6/generated-files/1797a7f48ea-8ac6805139f43351/output.pdf`
     xrefPath =
-      '/overleaf/services/clsi/output/602cee6f6460fca0ba7921e6/generated-files/1797a7f48ea-8ac6805139f43351/output.pdfxref'
+      `${outputRoot}/602cee6f6460fca0ba7921e6/generated-files/1797a7f48ea-8ac6805139f43351/output.pdfxref`
 
     reclaimed = 0
     Settings.pdfCachingMinChunkSize = 1024

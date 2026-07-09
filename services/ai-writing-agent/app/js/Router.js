@@ -5,9 +5,12 @@ import net from 'node:net'
 import os from 'node:os'
 import settings from '@overleaf/settings'
 import AgentController from './AgentController.js'
+import SandboxAgentController from './SandboxAgentController.js'
 import QuickEditController from './QuickEditController.js'
 import AutocompleteController from './AutocompleteController.js'
 import ModelConfigController from './ModelConfigController.js'
+import PythonDependencyController from './PythonDependencyController.js'
+import { getAgentRuntimeStatus } from './RuntimeConfigManager.js'
 import { createRateLimiter } from './util/project-access.js'
 
 /**
@@ -79,7 +82,9 @@ function requireProxySecret(req, res, next) {
     if (allowBypass && isLoopbackAddress(req.socket?.remoteAddress)) {
       return next()
     }
-    return res.status(500).json({ error: 'AI proxy secret not configured (set AI_PROXY_SECRET)' })
+    return res
+      .status(500)
+      .json({ error: 'AI proxy secret not configured (set AI_PROXY_SECRET)' })
   }
   if (req.headers['x-ai-proxy-secret'] !== secret) {
     return res.status(401).json({ error: 'Invalid proxy authentication' })
@@ -114,6 +119,13 @@ function rateLimitMiddleware(checker) {
 
 const messageRateLimit = rateLimitMiddleware(_messageRateCheck)
 const uploadRateLimit = rateLimitMiddleware(_uploadRateCheck)
+
+function requireAdmin(req, res, next) {
+  if (req.headers['x-user-is-admin'] !== 'true') {
+    return res.status(403).json({ error: 'Admin access required' })
+  }
+  next()
+}
 
 export function createRouter() {
   const router = Router()
@@ -154,25 +166,178 @@ export function createRouter() {
   })
 
   // File search for @ mention autocomplete
-  router.get('/projects/:projectId/files', requireUserId, AgentController.searchFiles)
+  router.get(
+    '/projects/:projectId/files',
+    requireUserId,
+    AgentController.searchFiles
+  )
 
-  // Project rules (memory)
-  router.get('/projects/:projectId/rules', requireUserId, AgentController.getProjectRules)
-  router.put('/projects/:projectId/rules', requireUserId, AgentController.updateProjectRules)
+  // Runtime status for feature-flagged sandbox migration.
+  router.get('/runtime/status', requireUserId, (_req, res) => {
+    res.json(getAgentRuntimeStatus())
+  })
+
+  // Sandbox session orchestration for the feature-flagged runtime migration.
+  router.post(
+    '/sandbox/sessions',
+    requireUserId,
+    requireAdmin,
+    messageRateLimit,
+    SandboxAgentController.startSession
+  )
+  router.post(
+    '/sandbox/workspaces',
+    requireUserId,
+    requireAdmin,
+    messageRateLimit,
+    SandboxAgentController.createWorkspace
+  )
+  router.get(
+    '/sandbox/workspaces/:workspaceId',
+    requireUserId,
+    requireAdmin,
+    SandboxAgentController.getWorkspace
+  )
+  router.post(
+    '/sandbox/sessions/:sandboxSessionId/stop',
+    requireUserId,
+    requireAdmin,
+    SandboxAgentController.stopSession
+  )
+  router.post(
+    '/sandbox/sessions/:sandboxSessionId/changes/:changeId/accept',
+    requireUserId,
+    requireAdmin,
+    SandboxAgentController.acceptChange
+  )
+  router.post(
+    '/sandbox/sessions/:sandboxSessionId/changes/:changeId/reject',
+    requireUserId,
+    requireAdmin,
+    SandboxAgentController.rejectChange
+  )
+  router.get(
+    '/sandbox/sessions/:sandboxSessionId/artifacts/:artifactId',
+    requireUserId,
+    requireAdmin,
+    SandboxAgentController.getArtifact
+  )
+
+  // Agent Context Project Instructions (AGENTS.md-backed)
+  router.get(
+    '/projects/:projectId/agent-instructions',
+    requireUserId,
+    AgentController.getAgentInstructions
+  )
+  router.post(
+    '/projects/:projectId/agent-instructions/create',
+    requireUserId,
+    AgentController.createAgentInstructions
+  )
+  router.put(
+    '/projects/:projectId/agent-instructions/draft',
+    requireUserId,
+    AgentController.saveAgentInstructionsDraft
+  )
+
+  // Agent Context Memories
+  router.get('/memories', requireUserId, AgentController.listMemories)
+  router.post('/memories', requireUserId, AgentController.createMemory)
+  router.patch(
+    '/memories/:memoryId',
+    requireUserId,
+    AgentController.updateMemory
+  )
+  router.put(
+    '/memories/:memoryId',
+    requireUserId,
+    AgentController.updateMemory
+  )
+  router.delete(
+    '/memories/:memoryId',
+    requireUserId,
+    AgentController.deleteMemory
+  )
+  router.get(
+    '/memory-suggestions',
+    requireUserId,
+    AgentController.listMemorySuggestions
+  )
+  router.post(
+    '/memory-suggestions/:suggestionId/accept',
+    requireUserId,
+    AgentController.acceptMemorySuggestion
+  )
+  router.post(
+    '/memory-suggestions/:suggestionId/dismiss',
+    requireUserId,
+    AgentController.dismissMemorySuggestion
+  )
 
   // Completion rules
-  router.get('/projects/:projectId/completion-rules', requireUserId, AgentController.getCompletionRules)
-  router.put('/projects/:projectId/completion-rules', requireUserId, AgentController.updateCompletionRules)
+  router.get(
+    '/projects/:projectId/completion-rules',
+    requireUserId,
+    AgentController.getCompletionRules
+  )
+  router.put(
+    '/projects/:projectId/completion-rules',
+    requireUserId,
+    AgentController.updateCompletionRules
+  )
 
   // Session management
   router.get('/sessions', requireUserId, AgentController.listSessions)
   router.post('/sessions', requireUserId, AgentController.createSession)
   router.get('/sessions/:sessionId', requireUserId, AgentController.getSession)
-  router.put('/sessions/:sessionId', requireUserId, AgentController.updateSession)
-  router.delete('/sessions/:sessionId', requireUserId, AgentController.deleteSession)
+  router.get(
+    '/sessions/:sessionId/context-snapshot/:turnId',
+    requireUserId,
+    AgentController.getContextSnapshot
+  )
+  router.get(
+    '/sessions/:sessionId/session-summary',
+    requireUserId,
+    AgentController.getSessionSummary
+  )
+  router.put(
+    '/sessions/:sessionId',
+    requireUserId,
+    AgentController.updateSession
+  )
+  router.delete(
+    '/sessions/:sessionId',
+    requireUserId,
+    AgentController.deleteSession
+  )
+  router.get(
+    '/sessions/:sessionId/team-runs',
+    requireUserId,
+    AgentController.listTeamRuns
+  )
+  router.get(
+    '/sessions/:sessionId/team-runs/:teamId',
+    requireUserId,
+    AgentController.getTeamRun
+  )
+  router.post(
+    '/sessions/:sessionId/team-runs/:teamId/cancel',
+    requireUserId,
+    AgentController.cancelTeamRun
+  )
+  router.post(
+    '/sessions/:sessionId/team-runs/:teamId/tasks/:taskId/retry',
+    requireUserId,
+    AgentController.retryTeamRunTask
+  )
 
   // Messaging
-  router.post('/sessions/:sessionId/messages', requireUserId, messageRateLimit, AgentController.sendMessage)
+  router.post(
+    '/sessions/:sessionId/messages',
+    requireUserId,
+    messageRateLimit,
+    AgentController.sendMessage
+  )
 
   // Independent file upload (no session required)
   router.post(
@@ -212,12 +377,25 @@ export function createRouter() {
     requireUserId,
     AgentController.getAttachment
   )
+  router.get(
+    '/sessions/:sessionId/artifacts/:artifactId',
+    requireUserId,
+    AgentController.getSessionArtifact
+  )
 
   // Stop active agent loop
-  router.post('/sessions/:sessionId/stop', requireUserId, AgentController.stopSession)
+  router.post(
+    '/sessions/:sessionId/stop',
+    requireUserId,
+    AgentController.stopSession
+  )
 
   // Manual context compaction
-  router.post('/sessions/:sessionId/compact', requireUserId, AgentController.compactSession)
+  router.post(
+    '/sessions/:sessionId/compact',
+    requireUserId,
+    AgentController.compactSession
+  )
 
   // Change confirmation (synchronous edit flow)
   router.post(
@@ -253,35 +431,125 @@ export function createRouter() {
 
   // Autocomplete (no session required, auth enforced at middleware + controller level)
   router.post('/autocomplete', requireUserId, AutocompleteController.complete)
-  router.post('/autocomplete/stream', requireUserId, AutocompleteController.streamComplete)
-
-  // --- Admin middleware ---
-  function requireAdmin(req, res, next) {
-    if (req.headers['x-user-is-admin'] !== 'true') {
-      return res.status(403).json({ error: 'Admin access required' })
-    }
-    next()
-  }
+  router.post(
+    '/autocomplete/stream',
+    requireUserId,
+    AutocompleteController.streamComplete
+  )
 
   // Model slots (user - read only)
   router.get('/model-slots', requireUserId, ModelConfigController.listSlots)
-  router.get('/model-slots/default', requireUserId, ModelConfigController.getDefaultSlot)
+  router.get(
+    '/model-slots/default',
+    requireUserId,
+    ModelConfigController.getDefaultSlot
+  )
 
   // Admin - model configs
-  router.get('/admin/model-configs', requireUserId, requireAdmin, ModelConfigController.listConfigs)
-  router.post('/admin/model-configs', requireUserId, requireAdmin, ModelConfigController.createConfig)
-  router.put('/admin/model-configs/:id', requireUserId, requireAdmin, ModelConfigController.updateConfig)
-  router.delete('/admin/model-configs/:id', requireUserId, requireAdmin, ModelConfigController.deleteConfig)
+  router.get(
+    '/admin/model-configs',
+    requireUserId,
+    requireAdmin,
+    ModelConfigController.listConfigs
+  )
+  router.post(
+    '/admin/model-configs',
+    requireUserId,
+    requireAdmin,
+    ModelConfigController.createConfig
+  )
+  router.put(
+    '/admin/model-configs/:id',
+    requireUserId,
+    requireAdmin,
+    ModelConfigController.updateConfig
+  )
+  router.delete(
+    '/admin/model-configs/:id',
+    requireUserId,
+    requireAdmin,
+    ModelConfigController.deleteConfig
+  )
+  router.post(
+    '/admin/sandbox/cleanup',
+    requireUserId,
+    requireAdmin,
+    SandboxAgentController.cleanupSandbox
+  )
+  router.get(
+    '/admin/python/dependency-requests',
+    requireUserId,
+    requireAdmin,
+    PythonDependencyController.listRequests
+  )
+  router.get(
+    '/admin/python/dependency-requests/:requestId',
+    requireUserId,
+    requireAdmin,
+    PythonDependencyController.getRequest
+  )
+  router.post(
+    '/admin/python/dependency-requests/:requestId/approve',
+    requireUserId,
+    requireAdmin,
+    PythonDependencyController.approveRequest
+  )
+  router.post(
+    '/admin/python/dependency-requests/:requestId/deny',
+    requireUserId,
+    requireAdmin,
+    PythonDependencyController.denyRequest
+  )
+  router.post(
+    '/projects/:projectId/python/dependency-requests/:requestId/approve',
+    requireUserId,
+    PythonDependencyController.approveProjectRequest
+  )
+  router.post(
+    '/projects/:projectId/python/dependency-requests/:requestId/deny',
+    requireUserId,
+    PythonDependencyController.denyProjectRequest
+  )
 
   // Admin - model slots
-  router.get('/admin/model-slots', requireUserId, requireAdmin, ModelConfigController.listAdminSlots)
-  router.post('/admin/model-slots', requireUserId, requireAdmin, ModelConfigController.createSlot)
-  router.put('/admin/model-slots/:slug', requireUserId, requireAdmin, ModelConfigController.updateSlot)
-  router.delete('/admin/model-slots/:slug', requireUserId, requireAdmin, ModelConfigController.deleteSlot)
+  router.get(
+    '/admin/model-slots',
+    requireUserId,
+    requireAdmin,
+    ModelConfigController.listAdminSlots
+  )
+  router.post(
+    '/admin/model-slots',
+    requireUserId,
+    requireAdmin,
+    ModelConfigController.createSlot
+  )
+  router.put(
+    '/admin/model-slots/:slug',
+    requireUserId,
+    requireAdmin,
+    ModelConfigController.updateSlot
+  )
+  router.delete(
+    '/admin/model-slots/:slug',
+    requireUserId,
+    requireAdmin,
+    ModelConfigController.deleteSlot
+  )
 
   // Admin - system config
-  router.get('/admin/system-config', requireUserId, requireAdmin, ModelConfigController.getSystemConfig)
-  router.put('/admin/system-config', requireUserId, requireAdmin, ModelConfigController.updateSystemConfig)
+  router.get(
+    '/admin/system-config',
+    requireUserId,
+    requireAdmin,
+    ModelConfigController.getSystemConfig
+  )
+  router.put(
+    '/admin/system-config',
+    requireUserId,
+    requireAdmin,
+    ModelConfigController.updateSystemConfig
+  )
 
   return router
 }

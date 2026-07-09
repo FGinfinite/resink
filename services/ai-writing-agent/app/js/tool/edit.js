@@ -3,7 +3,9 @@ import crypto from 'node:crypto'
 import { Tool, ToolResult } from './Tool.js'
 import { EditMatchError } from '../adapter/DocumentAdapter.js'
 import { replace } from '../util/replacer.js'
-import { validateProjectPath } from '../util/project-path.js'
+import { validateProjectPath, projectPathToWorkspaceRelative } from '../util/project-path.js'
+import { toUtf8, workspaceContentVersion, workspaceReadKey } from './read.js'
+import { assertPathAllowedByGlobs, AgentPolicyPathError } from '../agent-team/policyPathGuard.js'
 import settings from '@overleaf/settings'
 
 const MAX_OLD_TEXT_LENGTH = settings.documentEdit?.maxOldTextLength || 102400
@@ -60,6 +62,11 @@ This creates a pending change that the user must confirm before it is applied.`,
       currentDocPath,
       currentDocId,
     } = context
+    const sandboxSession = context.persistentWorkspace?.sandboxSession
+
+    if (sandboxSession) {
+      return this._executeWorkspace(args, context, sandboxSession)
+    }
 
     // Determine which document to edit
     let docId
@@ -126,6 +133,15 @@ This creates a pending change that the user must confirm before it is applied.`,
       }
       docId = currentDocId
       docPath = currentDocPath || '(current document)'
+    }
+
+    try {
+      assertPathAllowedByGlobs(docPath, context.writeGlobs, 'write')
+    } catch (error) {
+      if (error instanceof AgentPolicyPathError) {
+        return ToolResult.error(error.message, { code: error.code })
+      }
+      throw error
     }
 
     // Enforce read-before-write policy
@@ -297,6 +313,129 @@ This creates a pending change that the user must confirm before it is applied.`,
       throw error
     }
   }
+
+  async _executeWorkspace(args, context, sandboxSession) {
+    const { path, oldText, newText, replaceAll = false } = args
+    const requestedPath = path || context.currentDocPath
+
+    if (!requestedPath) {
+      return ToolResult.error(
+        'No document is currently open. Please specify a path parameter, or the user should open a document first.'
+      )
+    }
+
+    const pathResult = validateProjectPath(requestedPath)
+    if (pathResult.error) {
+      return ToolResult.error(pathResult.error)
+    }
+
+    const docPath = pathResult.path
+    const workspacePath = projectPathToWorkspaceRelative(docPath)
+    try {
+      assertPathAllowedByGlobs(docPath, context.writeGlobs, 'write')
+    } catch (error) {
+      if (error instanceof AgentPolicyPathError) {
+        return ToolResult.error(error.message, { code: error.code })
+      }
+      throw error
+    }
+    const readInfo = context.sessionState?.readDocuments?.get(workspaceReadKey(workspacePath))
+
+    if (!readInfo) {
+      return ToolResult.error(
+        `You must read the document first using read_document before editing. ` +
+          `Call read_document with path="${docPath}" first.`
+      )
+    }
+
+    if (oldText === newText) {
+      return ToolResult.error(
+        'oldText and newText are identical. No change would be made.'
+      )
+    }
+
+    if (!oldText.trim()) {
+      return ToolResult.error('oldText cannot be empty.')
+    }
+
+    try {
+      const content = toUtf8(await sandboxSession.readFile(workspacePath))
+      const currentVersion = workspaceContentVersion(content)
+      if (currentVersion !== readInfo.version) {
+        return ToolResult.error(
+          `Document has been modified since you last read it (read: v${readInfo.version}, current: v${currentVersion}). ` +
+          `Please call read_document to get the latest content before editing.`
+        )
+      }
+
+      const { newContent, matchedText } = replace(content, oldText, newText, replaceAll)
+      await sandboxSession.writeFile(workspacePath, newContent)
+      const liveDraft = await context.adapters?.liveDraftChangeBridge?.createDraftChange({
+        context,
+        sessionState: context.sessionState,
+        docPath,
+        workspacePath,
+        content,
+        newContent,
+        matchedText,
+        newText,
+        replaceAll,
+        baseVersion: readInfo.baseVersion ?? readInfo.canonicalVersion ?? null,
+        docId: readInfo.docId || context.currentDocId,
+        entityId: readInfo.entityId,
+      })
+
+      context.sessionState.readDocuments.set(workspaceReadKey(workspacePath), {
+        ...readInfo,
+        version: workspaceContentVersion(newContent),
+        path: workspacePath,
+        workspace: true,
+        readAt: Date.now(),
+      })
+
+      const liveDraftEvents = liveDraft?.events || (liveDraft?.event ? [liveDraft.event] : [])
+      const finalDraftStatus = liveDraft?.finalDraftChange?.status || null
+      return ToolResult.success(
+        formatWorkspaceEditOutput({ docPath, oldText: matchedText, newText }),
+        {
+          workspaceEdit: true,
+          workspaceEditApplied: finalDraftStatus === 'accepted',
+          workspaceEditFinalized:
+            finalDraftStatus === 'accepted' || finalDraftStatus === 'conflict',
+          path: docPath,
+          oldText: matchedText,
+          newText,
+          changeId: liveDraft?.draftChange?._id?.toString?.() || null,
+          changeSetId: liveDraft?.changeSet?._id?.toString?.() || null,
+          draftChange: liveDraft?.finalDraftChange || liveDraft?.event?.draftChange || null,
+          events: liveDraftEvents,
+        }
+      )
+    } catch (error) {
+      if (error.name === 'ReplacerMatchError') {
+        return ToolResult.error(
+          `Could not replace the specified text in "${docPath}". ` +
+            `Please use read_document to get the current content and ensure oldText matches exactly.\n\n` +
+            `Error: ${error.message}`
+        )
+      }
+      return ToolResult.error(`Failed to edit workspace file "${docPath}": ${error.message}`)
+    }
+  }
+}
+
+function formatWorkspaceEditOutput({ docPath, oldText, newText }) {
+  return [
+    'Workspace edit applied',
+    '',
+    `File: ${docPath}`,
+    '',
+    '--- Before ---',
+    truncateText(oldText, 500),
+    '',
+    '--- After ---',
+    truncateText(newText, 500),
+  ].join('\n')
 }
 
 /**

@@ -5,8 +5,9 @@ import Settings from '@overleaf/settings'
 import logger from '@overleaf/logger'
 import Docker from 'dockerode'
 import async from 'async'
-import LockManager from './DockerLockManager.js'
+import LockManager from './LockManager.js'
 import _ from 'lodash'
+import { getLastProjectAccessTime } from './LastProjectAccess.js'
 
 function buildDockerOptions() {
   const dockerHost = process.env.DOCKER_HOST?.trim()
@@ -58,6 +59,7 @@ export default DockerRunner = {
     timeout,
     environment,
     compileGroup,
+    cwd,
     callback
   ) {
     command = command.map(arg =>
@@ -114,7 +116,8 @@ export default DockerRunner = {
       volumes,
       timeout,
       environment,
-      compileGroup
+      compileGroup,
+      cwd
     )
     const fingerprint = DockerRunner._fingerprintContainer(options)
     const name = `project-${projectId}-${fingerprint}`
@@ -249,7 +252,8 @@ export default DockerRunner = {
     volumes,
     timeout,
     environment,
-    compileGroup
+    compileGroup,
+    cwd
   ) {
     const timeoutInSeconds = timeout / 1000
 
@@ -277,7 +281,7 @@ export default DockerRunner = {
     const options = {
       Cmd: command,
       Image: image,
-      WorkingDir: '/compile',
+      WorkingDir: cwd ? Path.join('/compile', cwd) : '/compile',
       NetworkDisabled: true,
       Memory: 1024 * 1024 * 1024, // 1 GiB
       User: Settings.clsi.docker.user,
@@ -560,7 +564,15 @@ export default DockerRunner = {
 
   examineOldContainer(container, callback) {
     const name = container.Name || (container.Names && container.Names[0])
-    const created = container.Created * 1000 // creation time is returned in seconds
+    let created = container.Created * 1000 // creation time is returned in seconds
+    if (name?.startsWith('/project-')) {
+      const plainName = name.slice(1)
+      const projectId = plainName.match(/^project-([0-9a-f]{24})-/)?.[1]
+      const lastAccess = projectId ? getLastProjectAccessTime(projectId) : 0
+      if (lastAccess) {
+        created = Math.max(created, lastAccess)
+      }
+    }
     const now = Date.now()
     const age = now - created
     const maxAge = DockerRunner.MAX_CONTAINER_AGE

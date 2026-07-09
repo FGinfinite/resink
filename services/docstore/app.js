@@ -7,15 +7,10 @@ import Settings from '@overleaf/settings'
 import logger from '@overleaf/logger'
 import express from 'express'
 import bodyParser from 'body-parser'
-import {
-  celebrate as validate,
-  Joi,
-  errors as handleValidationErrors,
-} from 'celebrate'
+import { handleValidationError } from '@overleaf/validation-tools'
 import mongodb from './app/js/mongodb.js'
 import Errors from './app/js/Errors.js'
 import HttpController from './app/js/HttpController.js'
-import { fileURLToPath } from 'node:url'
 
 const { mongoClient } = mongodb
 
@@ -80,13 +75,6 @@ app.post(
 app.patch(
   '/project/:project_id/doc/:doc_id',
   bodyParser.json(),
-  validate({
-    body: {
-      deleted: Joi.boolean(),
-      name: Joi.string().when('deleted', { is: true, then: Joi.required() }),
-      deletedAt: Joi.date().when('deleted', { is: true, then: Joi.required() }),
-    },
-  }),
   HttpController.patchDoc
 )
 app.delete('/project/:project_id/doc/:doc_id', (req, res) => {
@@ -102,7 +90,7 @@ app.get('/health_check', HttpController.healthCheck)
 
 app.get('/status', (req, res) => res.send('docstore is alive'))
 
-app.use(handleValidationErrors())
+app.use(handleValidationError)
 app.use(function (error, req, res, next) {
   if (error instanceof Errors.NotFoundError) {
     logger.warn({ req }, 'not found')
@@ -122,7 +110,7 @@ app.use(function (error, req, res, next) {
 const { port } = Settings.internal.docstore
 const { host } = Settings.internal.docstore
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   // Called directly
   mongoClient
     .connect()

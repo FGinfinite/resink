@@ -38,6 +38,26 @@ function acquire(key) {
   return lock
 }
 
+function runWithLock(key, runner, callback) {
+  let lock
+  try {
+    lock = acquire(key)
+  } catch (error) {
+    return callback(error)
+  }
+
+  const releaseLock = (...args) => {
+    lock.release()
+    callback(...args)
+  }
+
+  try {
+    runner(releaseLock)
+  } catch (error) {
+    releaseLock(error)
+  }
+}
+
 function checkConcurrencyLimit() {
   Metrics.gauge('concurrent_compile_requests', LOCKS.size)
 
@@ -82,4 +102,4 @@ class Lock {
   }
 }
 
-export default { acquire, getExistingLock }
+export default { acquire, getExistingLock, runWithLock }

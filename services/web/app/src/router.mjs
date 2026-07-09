@@ -65,9 +65,21 @@ import { plainTextResponse } from './infrastructure/Response.mjs'
 import SocketDiagnostics from './Features/SocketDiagnostics/SocketDiagnostics.mjs'
 import ClsiCacheController from './Features/Compile/ClsiCacheController.mjs'
 import AsyncLocalStorage from './infrastructure/AsyncLocalStorage.mjs'
+import multer from 'multer'
+import AIAssistantProxy from './Features/AIAssistant/AIAssistantProxy.mjs'
+import AIAttachmentController from './Features/AIAssistant/AIAttachmentController.mjs'
+import ProjectInternalController from './Features/Project/ProjectInternalController.mjs'
 
 const { renderUnsupportedBrowserPage, unsupportedBrowserMiddleware } =
   UnsupportedBrowserMiddleware
+
+const multerAI = multer({
+  dest: process.env.AI_ATTACHMENT_TMP_DIR || '/tmp',
+  limits: {
+    fileSize:
+      Settings.aiAssistant?.attachmentUploadMaxSize || 5 * 1024 * 1024,
+  },
+})
 
 const rateLimiters = {
   addEmail: new RateLimiter('add-email', {
@@ -197,6 +209,10 @@ const rateLimiters = {
     points: 5,
     duration: 60,
   }),
+  documentExportDownload: new RateLimiter('document-export-download', {
+    points: 30,
+    duration: 60,
+  }),
 }
 
 async function initialize(webRouter, privateApiRouter, publicApiRouter) {
@@ -302,6 +318,12 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
   HistoryRouter.apply(webRouter, privateApiRouter)
 
   await Modules.applyRouter(webRouter, privateApiRouter, publicApiRouter)
+
+  webRouter.use(
+    '/api/ai',
+    AuthenticationController.requireLogin(),
+    AIAssistantProxy.createProxy()
+  )
 
   if (Settings.enableSubscriptions) {
     webRouter.get(
@@ -612,7 +634,7 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
   )
 
   webRouter.get(
-    '/download/project/:Project_id/build/:buildId/output/cached/:filename',
+    '/download/project/:Project_id/build/:editorBuildId/output/cached/:filename(.*)',
     AuthorizationMiddleware.ensureUserCanReadProject,
     ClsiCacheController.downloadFromCache
   )
@@ -646,16 +668,7 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
 
   // direct url access to output files for a specific build
   webRouter.get(
-    /^\/project\/([^/]*)\/build\/([0-9a-f-]+)\/output\/(.*)$/,
-    function (req, res, next) {
-      const params = {
-        Project_id: req.params[0],
-        build_id: req.params[1],
-        file: req.params[2],
-      }
-      req.params = params
-      next()
-    },
+    '/project/:Project_id/build/:build_id/output/:file(.*)',
     rateLimiterMiddlewareOutputFiles,
     AuthorizationMiddleware.ensureUserCanReadProject,
     CompileController.getFileFromClsi
@@ -663,17 +676,7 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
 
   // direct url access to output files for a specific user and build
   webRouter.get(
-    /^\/project\/([^/]*)\/user\/([0-9a-f]+)\/build\/([0-9a-f-]+)\/output\/(.*)$/,
-    function (req, res, next) {
-      const params = {
-        Project_id: req.params[0],
-        user_id: req.params[1],
-        build_id: req.params[2],
-        file: req.params[3],
-      }
-      req.params = params
-      next()
-    },
+    '/project/:Project_id/user/:user_id/build/:build_id/output/:file(.*)',
     rateLimiterMiddlewareOutputFiles,
     AuthorizationMiddleware.ensureUserCanReadProject,
     CompileController.getFileFromClsi
@@ -777,6 +780,15 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
       }),
       AuthorizationMiddleware.ensureUserCanReadProject,
       ProjectDownloadsController.exportProjectConversion
+    )
+    webRouter.get(
+      '/project/:Project_id/download/conversion/:conversionId/:type/build/:buildId/output/:file(.*)',
+      AuthenticationController.requireLogin(),
+      RateLimiterMiddleware.rateLimit(rateLimiters.documentExportDownload, {
+        params: ['Project_id'],
+      }),
+      AuthorizationMiddleware.ensureUserCanReadProject,
+      ProjectDownloadsController.downloadPreparedProjectExport
     )
   }
 
@@ -929,6 +941,52 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
     ProjectApiController.getProjectDetails
   )
   privateApiRouter.get(
+    '/internal/project/:Project_id/entities',
+    AuthenticationController.requirePrivateApiAuth(),
+    ProjectApiController.getProjectEntitiesForAi
+  )
+  privateApiRouter.head(
+    '/internal/project/:Project_id/file/:File_id/content',
+    AuthenticationController.requirePrivateApiAuth(),
+    FileStoreController.getFileHead
+  )
+  privateApiRouter.get(
+    '/internal/project/:Project_id/file/:File_id/content',
+    AuthenticationController.requirePrivateApiAuth(),
+    FileStoreController.getFile
+  )
+  privateApiRouter.get(
+    '/internal/project/:projectId/membership/:userId',
+    AuthenticationController.requirePrivateApiAuth(),
+    ProjectInternalController.checkMembership
+  )
+  privateApiRouter.get(
+    '/internal/project/:projectId/write-membership/:userId',
+    AuthenticationController.requirePrivateApiAuth(),
+    ProjectInternalController.checkWriteMembership
+  )
+  privateApiRouter.post(
+    '/internal/ai/attachment',
+    AuthenticationController.requirePrivateApiAuth(),
+    multerAI.single('file'),
+    AIAttachmentController.uploadAttachment
+  )
+  privateApiRouter.get(
+    '/internal/ai/attachment',
+    AuthenticationController.requirePrivateApiAuth(),
+    AIAttachmentController.downloadAttachment
+  )
+  privateApiRouter.delete(
+    '/internal/ai/attachment',
+    AuthenticationController.requirePrivateApiAuth(),
+    AIAttachmentController.deleteAttachment
+  )
+  privateApiRouter.get(
+    '/internal/ai/project/:Project_id/file/:file_id/content',
+    AuthenticationController.requirePrivateApiAuth(),
+    AIAttachmentController.getProjectFileContent
+  )
+  privateApiRouter.get(
     '/internal/project/:Project_id/zip',
     AuthenticationController.requirePrivateApiAuth(),
     ProjectDownloadsController.downloadProject
@@ -959,6 +1017,11 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
     '/project/:Project_id/doc/:doc_id',
     AuthenticationController.requirePrivateApiAuth(),
     DocumentController.setDocument
+  )
+  privateApiRouter.post(
+    '/project/:Project_id/doc/:doc_id/changes/reject',
+    AuthenticationController.requirePrivateApiAuth(),
+    DocumentController.trackChangesRejected
   )
 
   privateApiRouter.post(

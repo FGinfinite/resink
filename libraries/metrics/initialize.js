@@ -28,20 +28,6 @@ initializePrometheus()
 initializePromWrapper()
 recordProcessStart()
 
-function safeRequireOptional(moduleName, featureName) {
-  try {
-    return require(moduleName)
-  } catch (error) {
-    if (error?.code === 'MODULE_NOT_FOUND') {
-      console.warn(
-        `Skipping ${featureName}: optional module '${moduleName}' is not available`
-      )
-      return null
-    }
-    throw error
-  }
-}
-
 function initializeOpenTelemetryInstrumentation() {
   console.log('Starting OpenTelemetry instrumentation')
   const opentelemetry = require('@opentelemetry/sdk-node')
@@ -61,13 +47,7 @@ function initializeOpenTelemetryInstrumentation() {
 
   let exporter
   if (GCP_OPENTELEMETRY) {
-    const GCP = safeRequireOptional(
-      '@google-cloud/opentelemetry-cloud-trace-exporter',
-      'GCP OpenTelemetry instrumentation'
-    )
-    if (!GCP) {
-      return
-    }
+    const GCP = require('@google-cloud/opentelemetry-cloud-trace-exporter')
     exporter = new GCP.TraceExporter()
   } else if (JAEGER_OPENTELEMETRY) {
     const {
@@ -100,13 +80,7 @@ function initializeOpenTelemetryLogging() {
 
 function initializeProfileAgent() {
   console.log('Starting Google Profile Agent')
-  const profiler = safeRequireOptional(
-    '@google-cloud/profiler',
-    'Google Profile Agent'
-  )
-  if (!profiler) {
-    return
-  }
+  const profiler = require('@google-cloud/profiler')
   profiler.start({
     serviceContext: {
       service: APP_NAME,

@@ -29,8 +29,6 @@ const settings = {
     filestore: {
       port: 3009,
       host: process.env.LISTEN_ADDRESS || '127.0.0.1',
-      writeSecret: process.env.FILESTORE_WRITE_SECRET || undefined,
-      readSecret: process.env.FILESTORE_READ_SECRET || undefined,
     },
   },
 
@@ -75,11 +73,6 @@ const settings = {
       // allow signed links to be generated for these buckets
       project_blobs: process.env.OVERLEAF_EDITOR_PROJECT_BLOBS_BUCKET,
       global_blobs: process.env.OVERLEAF_EDITOR_BLOBS_BUCKET,
-
-      ai_attachments: process.env.AI_ATTACHMENTS_BUCKET || Path.join(
-        __dirname,
-        '../ai_attachments'
-      ),
     },
 
     fallback: process.env.FALLBACK_BACKEND
@@ -105,7 +98,6 @@ const settings = {
   },
 
   enableConversions: process.env.ENABLE_CONVERSIONS === 'true',
-  converter: process.env.CONVERTER || 'imagemagick',
 
   converter: process.env.CONVERTER || 'imagemagick',
 

@@ -8,6 +8,7 @@ import type {
 } from '../../../../../modules/notifications/app/src/types.js'
 import { sendMB } from '@/infrastructure/event-tracking'
 import { useIdeReactContext } from '@/features/ide-react/context/ide-react-context'
+import { type PermissionsLevel } from '@/features/ide-react/types/permissions'
 
 export type SettableNotificationLevel = 'all' | 'replies' | 'off'
 export type NotificationLevel = SettableNotificationLevel | 'global-off'
@@ -21,73 +22,92 @@ function levelToPreferences(
   switch (level) {
     case 'all':
       return {
-        trackedChangesOnOwnProject: true,
-        trackedChangesOnInvitedProject: true,
         commentOnOwnProject: true,
         commentOnInvitedProject: true,
-        repliesOnOwnProject: true,
-        repliesOnInvitedProject: true,
         repliesOnAuthoredThread: true,
         repliesOnParticipatingThread: true,
+        commentResolvedOnAuthoredThread: true,
+        commentResolvedOnParticipatingThread: true,
+        commentReopenedOnAuthoredThread: true,
+        commentReopenedOnParticipatingThread: true,
+        trackedChangesOnOwnProject: true,
+        trackedChangesOnInvitedProject: true,
+        trackChangesAcceptedOnAuthoredChange: true,
+        trackChangesRejectedOnAuthoredChange: true,
       }
     case 'replies':
       return {
-        trackedChangesOnOwnProject: false,
-        trackedChangesOnInvitedProject: false,
         commentOnOwnProject: false,
         commentOnInvitedProject: false,
-        repliesOnOwnProject: false,
-        repliesOnInvitedProject: false,
         repliesOnAuthoredThread: true,
         repliesOnParticipatingThread: true,
+        commentResolvedOnAuthoredThread: true,
+        commentResolvedOnParticipatingThread: true,
+        commentReopenedOnAuthoredThread: true,
+        commentReopenedOnParticipatingThread: true,
+        trackedChangesOnOwnProject: false,
+        trackedChangesOnInvitedProject: false,
+        trackChangesAcceptedOnAuthoredChange: true,
+        trackChangesRejectedOnAuthoredChange: true,
       }
     case 'off':
       return {
-        trackedChangesOnOwnProject: false,
-        trackedChangesOnInvitedProject: false,
         commentOnOwnProject: false,
         commentOnInvitedProject: false,
-        repliesOnOwnProject: false,
-        repliesOnInvitedProject: false,
         repliesOnAuthoredThread: false,
         repliesOnParticipatingThread: false,
+        commentResolvedOnAuthoredThread: false,
+        commentResolvedOnParticipatingThread: false,
+        commentReopenedOnAuthoredThread: false,
+        commentReopenedOnParticipatingThread: false,
+        trackedChangesOnOwnProject: false,
+        trackedChangesOnInvitedProject: false,
+        trackChangesAcceptedOnAuthoredChange: false,
+        trackChangesRejectedOnAuthoredChange: false,
       }
   }
 }
 
 /**
- * Map backend preferences to UI notification level
+ * Map backend preferences to UI notification level, considering the user's
+ * role so that only the relevant key variant is inspected.
  */
 function preferencesToLevel(
-  preferences: GlobalNotificationPreferencesSchema
+  preferences: GlobalNotificationPreferencesSchema,
+  permissionsLevel: PermissionsLevel
 ): NotificationLevel {
   if (preferences.muteAllNotifications) {
     return 'global-off'
   }
 
-  // If all notifications are off
-  if (
-    !preferences.commentOnOwnProject &&
-    !preferences.commentOnInvitedProject &&
-    !preferences.repliesOnOwnProject &&
-    !preferences.repliesOnInvitedProject &&
-    !preferences.repliesOnAuthoredThread &&
-    !preferences.repliesOnParticipatingThread
-  ) {
+  const isOwner = permissionsLevel === 'owner'
+
+  const projectComments = isOwner
+    ? preferences.commentOnOwnProject
+    : preferences.commentOnInvitedProject
+  const projectTrackedChanges = isOwner
+    ? preferences.trackedChangesOnOwnProject
+    : preferences.trackedChangesOnInvitedProject
+
+  const anyProjectNotifications = projectComments || projectTrackedChanges
+  const anyParticipantNotifications =
+    preferences.repliesOnAuthoredThread ||
+    preferences.repliesOnParticipatingThread ||
+    preferences.trackChangesAcceptedOnAuthoredChange ||
+    preferences.trackChangesRejectedOnAuthoredChange ||
+    preferences.commentResolvedOnAuthoredThread ||
+    preferences.commentResolvedOnParticipatingThread ||
+    preferences.commentReopenedOnAuthoredThread ||
+    preferences.commentReopenedOnParticipatingThread
+
+  if (!anyProjectNotifications && !anyParticipantNotifications) {
     return 'off'
   }
 
-  // If only reply-related notifications are on
-  if (
-    !preferences.commentOnOwnProject &&
-    !preferences.commentOnInvitedProject &&
-    (preferences.repliesOnAuthoredThread ||
-      preferences.repliesOnParticipatingThread)
-  ) {
+  if (!anyProjectNotifications && anyParticipantNotifications) {
     return 'replies'
   }
 
-  // Default to 'all' for any other combination
   return 'all'
 }
 
@@ -104,11 +124,11 @@ export function useProjectNotificationPreferences() {
       `/notifications/preferences/project/${projectId}`
     )
       .then(prefs => {
-        setNotificationLevel(preferencesToLevel(prefs))
+        setNotificationLevel(preferencesToLevel(prefs, permissionsLevel))
       })
       .catch(debugConsole.error)
       .finally(() => setIsLoading(false))
-  }, [projectId])
+  }, [projectId, permissionsLevel])
 
   const setLevel = useCallback(
     (level: SettableNotificationLevel) => {

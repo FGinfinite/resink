@@ -44,7 +44,7 @@ const getSuggestion = routePath => {
     const kebabed = new RegExp(newSource, routePath.flags)
     return kebabed.source.toString() === routePath.source.toString()
       ? null
-      : kebabed
+      : `/${kebabed.source}/${kebabed.flags}`
   }
 }
 

@@ -158,7 +158,7 @@ describe('outline.js', () => {
       const result = formatOutlineEntries(entries)
       const lines = result.split('\n')
       expect(lines[0]).toMatch(/^\\chapter/)
-      expect(lines[1]).toMatch(/^  \\section/)
+      expect(lines[1]).toMatch(/^ {2}\\section/)
     })
 
     it('filters by fromLine', () => {

@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+  echo "usage: wait_for_it host:port [--timeout=seconds] [-- command...]" >&2
+  exit 2
+fi
+
+target=$1
+shift
+host=${target%:*}
+port=${target##*:}
+timeout=60
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --timeout=*)
+      timeout=${1#--timeout=}
+      shift
+      ;;
+    --timeout)
+      if [[ $# -lt 2 ]]; then
+        echo "wait_for_it: --timeout requires a value" >&2
+        exit 2
+      fi
+      timeout=$2
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+deadline=$((SECONDS + timeout))
+while ! (echo >"/dev/tcp/${host}/${port}") >/dev/null 2>&1; do
+  if (( SECONDS >= deadline )); then
+    echo "wait_for_it: timed out waiting for ${host}:${port}" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+if [[ $# -gt 0 ]]; then
+  exec "$@"
+fi

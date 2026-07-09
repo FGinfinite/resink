@@ -61,6 +61,8 @@ const Features = {
         return Boolean(Settings.disableChat) === false
       case 'link-sharing':
         return Boolean(Settings.disableLinkSharing) === false
+      case 'ai-assistant':
+        return Boolean(Settings.enableAiAssistant)
       case 'github-sync':
         return Boolean(Settings.enableGithubSync)
       case 'git-bridge':
@@ -91,8 +93,6 @@ const Features = {
         return symbolPaletteModuleAvailable
       case 'track-changes':
         return trackChangesModuleAvailable
-      case 'ai-assistant':
-        return Boolean(Settings.enableAiAssistant)
       default:
         throw new Error(`unknown feature: ${feature}`)
     }

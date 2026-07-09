@@ -34,8 +34,4 @@ export interface Meta {
         timestamp: number
         version: number
       }
-    | {
-        kind: 'ai-agent'
-      }
-  user_id?: string
 }

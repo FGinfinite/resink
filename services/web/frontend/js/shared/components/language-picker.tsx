@@ -9,9 +9,11 @@ import {
 import { useTranslation } from 'react-i18next'
 import getMeta from '@/utils/meta'
 import MaterialIcon from '@/shared/components/material-icon'
+import { useLocation } from '@/shared/hooks/use-location'
 
 function LanguagePicker({ showHeader } = { showHeader: false }) {
   const { t } = useTranslation()
+  const { reload } = useLocation()
 
   const currentLangCode = getMeta('ol-i18n').currentLangCode
   const translatedLanguages = getMeta('ol-footer').translatedLanguages
@@ -20,7 +22,7 @@ function LanguagePicker({ showHeader } = { showHeader: false }) {
     if (lngCode === currentLangCode) return
     const safeLngCode = lngCode.replace(/[^a-zA-Z0-9_-]/g, '')
     document.cookie = `i18next=${safeLngCode};path=/;max-age=${365 * 24 * 60 * 60};SameSite=Strict`
-    window.location.reload()
+    reload()
   }
 
   return (

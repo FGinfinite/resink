@@ -31,23 +31,8 @@ function addCachingToKey(key, opts) {
 }
 
 function bucketFileKeyMiddleware(req, res, next) {
-  const bucketName = req.params.bucket
-  // Only allow configured bucket names — reject unknown ones to prevent path traversal
-  // Use Object.hasOwn to avoid prototype pollution (e.g. '__proto__', 'constructor')
-  if (!Object.hasOwn(settings.filestore.stores, bucketName)) {
-    return res.status(400).send('Unknown bucket')
-  }
-  const resolvedBucket = settings.filestore.stores[bucketName]
-  if (!resolvedBucket || typeof resolvedBucket !== 'string') {
-    return res.status(400).send('Unknown bucket')
-  }
-  const key = req.params[0]
-  // Reject keys containing path traversal sequences
-  if (!key || key.includes('..') || key.startsWith('/')) {
-    return res.status(400).send('Invalid key')
-  }
-  req.bucket = resolvedBucket
-  req.key = key
+  req.bucket = req.params.bucket
+  req.key = req.params[0]
   next()
 }
 

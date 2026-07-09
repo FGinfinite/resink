@@ -235,7 +235,7 @@ const mathPreviewTheme = EditorView.baseTheme({
   },
   '&dark .ol-cm-math-tooltip': {
     boxShadow: '0px 2px 4px 0px #1e253029',
-    border: '1px solid var(--border-dark, #2f3a4c) !important',
-    backgroundColor: 'var(--bg-dark-elevated, #1b222c) !important',
+    border: '1px solid #2f3a4c !important',
+    backgroundColor: '#1b222c !important',
   },
 })

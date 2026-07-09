@@ -117,7 +117,11 @@ async function settingsPage(req, res) {
   }
 
   await SplitTestHandler.promises.getAssignment(req, res, 'email-notifications')
-
+  await SplitTestHandler.promises.getAssignment(
+    req,
+    res,
+    'domain-captured-by-group'
+  )
   res.render('user/settings', {
     title: 'account_settings',
     user: {
@@ -272,8 +276,8 @@ const UserPagesController = {
       title: Settings.nav?.login_support_title || 'login',
       login_support_title: Settings.nav?.login_support_title,
       login_support_text: Settings.nav?.login_support_text,
-      oauthError: req.query.error,
       metadata,
+      oauthError: req.query.error,
     })
   },
 

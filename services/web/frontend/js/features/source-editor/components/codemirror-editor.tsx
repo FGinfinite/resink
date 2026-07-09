@@ -11,7 +11,10 @@ import importOverleafModules from '../../../../macros/import-overleaf-module.mac
 import { FigureModal } from './figure-modal/figure-modal'
 import { ReviewPanelProviders } from '@/features/review-panel/context/review-panel-providers'
 import { ReviewPanelRoot } from '@/features/review-panel/components/review-panel-root'
+import ReviewPanelTabsHeaderPortal from '@/features/review-panel/components/review-panel-tabs-header-portal'
 import ReviewTooltipMenu from '@/features/review-panel/components/review-tooltip-menu'
+import EditorFloatingMenu from '@/features/editor-floating-menu/editor-floating-menu'
+import AddCommentCommand from '@/features/editor-floating-menu/components/add-comment-command'
 import AIQuickEditToolbar from '@/features/ai-assistant/components/ai-quick-edit-toolbar'
 import AIAutocompleteBridge from '@/features/ai-assistant/components/ai-autocomplete-bridge'
 import {
@@ -27,6 +30,7 @@ import { useFeatureFlag } from '@/shared/context/split-test-context'
 import { useEditorOpenDocContext } from '@/features/ide-react/context/editor-open-doc-context'
 import { useEditorPropertiesContext } from '@/features/ide-react/context/editor-properties-context'
 import UpgradeTrackChangesModal from '@/features/review-panel/components/upgrade-track-changes-modal'
+import { useUserSettingsContext } from '@/shared/context/user-settings-context'
 
 // TODO: remove this when definitely no longer used
 export * from './codemirror-context'
@@ -94,6 +98,12 @@ function CodeMirrorEditorComponents({
 }: CodeMirrorEditorComponentsProps) {
   useToolbarMenuBarEditorCommands()
   const { features } = useProjectContext()
+  const {
+    userSettings: { floatingMenu },
+  } = useUserSettingsContext()
+  const writefullToolbarMigrationEnabled = useFeatureFlag(
+    'writefull-toolbar-migration'
+  )
   return (
     <ReviewPanelProviders>
       <CodemirrorOutline />
@@ -107,7 +117,17 @@ function CodeMirrorEditorComponents({
       <EditorContextMenu />
       <AIQuickEditToolbar />
       <AIAutocompleteBridge />
-      {features.trackChangesVisible && <ReviewTooltipMenu />}
+      {floatingMenu &&
+        features.trackChangesVisible &&
+        (writefullToolbarMigrationEnabled ? (
+          <>
+            <AddCommentCommand />
+            <EditorFloatingMenu />
+          </>
+        ) : (
+          <ReviewTooltipMenu />
+        ))}
+      {features.trackChangesVisible && <ReviewPanelTabsHeaderPortal />}
       {features.trackChangesVisible && <ReviewPanelRoot />}
       {features.trackChangesVisible && <UpgradeTrackChangesModal />}
 

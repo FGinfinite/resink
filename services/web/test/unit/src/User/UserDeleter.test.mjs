@@ -97,6 +97,10 @@ describe('UserDeleter', function () {
       deleteOnboardingDataCollection: sinon.stub().resolves(),
     }
 
+    ctx.Features = {
+      hasFeature: sinon.stub().withArgs('saas').returns(true),
+    }
+
     ctx.EmailHandler = {
       promises: {
         sendEmail: sinon.stub().resolves(),
@@ -181,6 +185,10 @@ describe('UserDeleter', function () {
 
     vi.doMock('../../../../app/src/Features/Email/EmailHandler', () => ({
       default: ctx.EmailHandler,
+    }))
+
+    vi.doMock('../../../../app/src/infrastructure/Features', () => ({
+      default: ctx.Features,
     }))
 
     ctx.UserDeleter = (await import(modulePath)).default

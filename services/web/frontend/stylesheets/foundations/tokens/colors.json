@@ -258,28 +258,23 @@
   },
   "bg-dark-primary": {
     "$type": "color",
-    "$value": "#0a0e14",
-    "$primitive": null
+    "$value": "#1b222c",
+    "$primitive": "neutral-90"
   },
   "bg-dark-secondary": {
     "$type": "color",
-    "$value": "#161b22",
-    "$primitive": null
+    "$value": "#2f3a4c",
+    "$primitive": "neutral-80"
   },
   "bg-dark-tertiary": {
     "$type": "color",
-    "$value": "#1e252e",
-    "$primitive": null
+    "$value": "#495365",
+    "$primitive": "neutral-70"
   },
   "bg-dark-disabled": {
     "$type": "color",
-    "$value": "#1e252e",
-    "$primitive": null
-  },
-  "bg-dark-elevated": {
-    "$type": "color",
-    "$value": "#272d36",
-    "$primitive": null
+    "$value": "#495365",
+    "$primitive": "neutral-70"
   },
   "bg-accent-01": {
     "$type": "color",

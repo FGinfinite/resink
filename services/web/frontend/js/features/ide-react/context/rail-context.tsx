@@ -23,10 +23,19 @@ export type RailTabKey =
   | 'review-panel'
   | 'chat'
   | 'full-project-search'
+  | 'dimensions'
   | 'workbench'
   | 'ai-assistant'
 
-export type RailModalKey = 'keyboard-shortcuts' | 'contact-us' | 'dictionary'
+export type RailModalKey =
+  | 'keyboard-shortcuts'
+  | 'contact-us'
+  | 'dictionary'
+  | 'labs'
+
+export function dispatchOpenRailModal(key: RailModalKey) {
+  window.dispatchEvent(new CustomEvent('ui:open-rail-modal', { detail: key }))
+}
 
 const RailContext = createContext<
   | {
@@ -121,6 +130,16 @@ export const RailProvider: FC<React.PropsWithChildren> = ({ children }) => {
   )
 
   useEventListener(
+    'ui:open-rail-modal',
+    useCallback(
+      (event: Event) => {
+        setActiveModal((event as CustomEvent<RailModalKey>).detail)
+      },
+      [setActiveModal]
+    )
+  )
+
+  useEventListener(
     'keydown',
     useCallback(
       (event: KeyboardEvent) => {
@@ -185,7 +204,6 @@ export const useRailContext = () => {
   return context
 }
 
-/** Safe version that returns undefined when outside RailProvider (e.g. detached mode) */
 export const useOptionalRailContext = () => {
   return useContext(RailContext)
 }

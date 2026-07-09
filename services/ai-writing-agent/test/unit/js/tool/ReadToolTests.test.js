@@ -38,6 +38,9 @@ vi.mock('@overleaf/o-error', () => {
 const { ReadDocumentTool } = await import(
   '../../../../app/js/tool/read.js'
 )
+const { workspaceContentVersion } = await import(
+  '../../../../app/js/tool/read.js'
+)
 
 describe('ReadDocumentTool', () => {
   let tool
@@ -59,6 +62,9 @@ describe('ReadDocumentTool', () => {
       currentDocPath: '/main.tex',
       adapters: {
         document: mockDocumentAdapter,
+        project: {
+          resolvePathToDocId: vi.fn(),
+        },
       },
       sessionState: {
         readDocuments: new Map(),
@@ -125,6 +131,46 @@ describe('ReadDocumentTool', () => {
       const readInfo = contextWithoutMap.sessionState.readDocuments.get('proj-1:doc-1')
       expect(readInfo).toBeDefined()
       expect(readInfo.version).toBe(1)
+    })
+
+    it('tracks canonical doc metadata for workspace reads', async () => {
+      mockContext.adapters.project.resolvePathToDocId.mockResolvedValueOnce('doc-1')
+      mockDocumentAdapter.getDocumentContent.mockResolvedValueOnce({
+        content: 'Canonical content',
+        version: 12,
+      })
+      const sandboxSession = {
+        readFile: vi.fn().mockResolvedValue('Workspace content'),
+      }
+
+      const result = await tool.execute(
+        { path: 'main.tex' },
+        {
+          ...mockContext,
+          persistentWorkspace: { sandboxSession },
+        }
+      )
+
+      expect(result.success).toBe(true)
+      expect(result.data.docId).toBe('doc-1')
+      expect(mockContext.adapters.project.resolvePathToDocId).toHaveBeenCalledWith(
+        'proj-1',
+        '/main.tex'
+      )
+      expect(mockDocumentAdapter.getDocumentContent).toHaveBeenCalledWith(
+        'proj-1',
+        'doc-1'
+      )
+      const readInfo = mockContext.sessionState.readDocuments.get('workspace:main.tex')
+      expect(readInfo).toMatchObject({
+        version: workspaceContentVersion('Workspace content'),
+        path: 'main.tex',
+        workspace: true,
+        docId: 'doc-1',
+        entityId: 'doc-1',
+        baseVersion: 12,
+        canonicalVersion: 12,
+      })
     })
 
     it('outputs content with line numbers', async () => {
@@ -333,6 +379,59 @@ describe('ReadDocumentTool', () => {
         expect(result.success).toBe(true)
         expect(result.output).toContain('11| Line 11')
         expect(result.output).toContain('15| Line 15')
+      })
+    })
+
+    describe('persistent workspace', () => {
+      it('reads from sandbox workspace and tracks readDocuments by workspace key', async () => {
+        mockDocumentAdapter.getDocumentContent.mockResolvedValueOnce({
+          content: 'A\nB\nC',
+          version: 1,
+        })
+        const sandboxSession = {
+          readFile: vi.fn().mockResolvedValue('A\nB\nC'),
+        }
+        const result = await tool.execute(
+          { path: 'main.tex', offset: 2, limit: 1 },
+          {
+            ...mockContext,
+            persistentWorkspace: { sandboxSession },
+          }
+        )
+
+        expect(result.success).toBe(true)
+        expect(sandboxSession.readFile).toHaveBeenCalledWith('main.tex')
+        expect(mockDocumentAdapter.getDocumentContent).toHaveBeenCalledWith(
+          'proj-1',
+          'doc-1'
+        )
+        expect(result.output).toContain('2| B')
+        expect(result.data.workspace).toBe(true)
+        expect(
+          mockContext.sessionState.readDocuments.get('workspace:main.tex')
+        ).toMatchObject({
+          version: workspaceContentVersion('A\nB\nC'),
+          path: 'main.tex',
+          workspace: true,
+          docId: 'doc-1',
+          baseVersion: 1,
+          canonicalVersion: 1,
+        })
+      })
+
+      it('falls back to currentDocPath in sandbox workspace', async () => {
+        const sandboxSession = {
+          readFile: vi.fn().mockResolvedValue('Current content'),
+        }
+        await tool.execute(
+          {},
+          {
+            ...mockContext,
+            persistentWorkspace: { sandboxSession },
+          }
+        )
+
+        expect(sandboxSession.readFile).toHaveBeenCalledWith('main.tex')
       })
     })
   })

@@ -4,6 +4,11 @@
   .plans-title-section {
     padding-top: var(--spacing-15);
     padding-bottom: var(--spacing-13);
+
+    .geo-banner-container {
+      margin-top: 0;
+      margin-bottom: var(--spacing-15);
+    }
   }
 
   // Period toggle switch — used only by _plans-period-toggle.pug
@@ -95,6 +100,10 @@
 
   .plans-interstitial-disclaimer {
     padding-top: var(--spacing-08);
+  }
+
+  .plans-skip-link {
+    margin-top: var(--spacing-08);
   }
 
   .plans-cards-section {
@@ -215,7 +224,7 @@
       background-color: var(--bg-light-primary);
       border: 1px solid var(--neutral-30);
       border-radius: var(--border-radius-medium);
-      color: var(--neutral-60);
+      color: var(--content-secondary);
       display: grid;
       grid-row: span 4;
       grid-template-rows: subgrid;
@@ -284,19 +293,28 @@
         padding-top: calc(var(--secondary-cta-top-padding) - var(--spacing-03));
       }
 
-      // Plain-link and edu discount occupy row 4 of the PAGE subgrid.
-      // Edu discount lives inside the annual period wrapper (a subgrid child),
-      // so two levels of '>' are needed. Plain-link is a direct card-cta child.
-      > .plans-cta-plain-link {
+      .plans-cta-plain-link {
         align-self: start;
         grid-row: 4;
         padding-top: var(--secondary-cta-top-padding);
+        text-align: center;
+
+        a {
+          color: var(--content-secondary);
+          font-size: var(--font-size-02);
+          text-decoration: underline;
+
+          &:hover {
+            color: var(--content-primary);
+          }
+        }
       }
 
       > .only-show-for-specific-plan-period > .plans-educational-discount {
         align-self: center;
         grid-row: 4;
         padding-top: var(--spacing-04);
+        text-align: center;
       }
     }
 
@@ -326,7 +344,7 @@
     }
 
     .card-description {
-      color: var(--neutral-60);
+      color: var(--content-secondary);
       margin-block: 0;
     }
 
@@ -337,10 +355,6 @@
       gap: var(--spacing-03);
       list-style: none;
       padding-left: 0;
-    }
-
-    .card-include-strong {
-      font-weight: 700;
     }
 
     .card-includes-list-item.only-show-for-specific-plan-period {
@@ -372,17 +386,6 @@
       cursor: help;
     }
 
-    .plans-cta-plain-link {
-      color: var(--content-secondary);
-      font-size: var(--font-size-02);
-      text-align: center;
-      text-decoration: underline;
-
-      &:hover {
-        color: var(--content-primary);
-      }
-    }
-
     .card-footer {
       background-color: transparent;
       border: none;
@@ -397,7 +400,7 @@
       align-items: center;
       color: var(--content-primary);
       cursor: pointer;
-      display: flex;
+      display: inline-flex;
       gap: var(--spacing-03);
       justify-content: center;
       margin: 0;
@@ -685,7 +688,8 @@
   .plans-feature-table-section-icons {
     align-items: center;
     display: flex;
-    gap: var(--spacing-04);
+    flex-wrap: wrap;
+    gap: var(--spacing-06);
   }
 
   .plans-feature-table-section-icon-wrapper {
@@ -714,7 +718,7 @@
   .plans-feature-table-integrations-content {
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-03);
+    gap: var(--spacing-04);
   }
 
   .plans-feature-table-integrations-label {

@@ -3,9 +3,13 @@
 
 FROM node:24.14.1 AS base
 
-WORKDIR /overleaf/services/web
+# Corepack setup, shared between all the images.
 ENV PATH="/overleaf/node_modules/.bin:$PATH"
-RUN corepack enable
+ENV COREPACK_HOME=/opt/corepack
+RUN corepack enable && corepack install -g yarn@4.14.1
+ENV COREPACK_ENABLE_NETWORK=0
+
+WORKDIR /overleaf/services/web
 
 # Google Cloud Storage needs a writable $HOME/.config for resumable uploads
 # (see https://googleapis.dev/nodejs/storage/latest/File.html#createWriteStream)
@@ -34,6 +38,7 @@ RUN cd /overleaf/services/web && node scripts/fetch-pyodide-packages.mjs
 
 COPY package.json yarn.lock .yarnrc.yml /overleaf/
 COPY libraries/access-token-encryptor/package.json /overleaf/libraries/access-token-encryptor/package.json
+COPY libraries/config-system/package.json /overleaf/libraries/config-system/package.json
 COPY libraries/eslint-plugin/package.json /overleaf/libraries/eslint-plugin/package.json
 COPY libraries/fetch-utils/package.json /overleaf/libraries/fetch-utils/package.json
 COPY libraries/logger/package.json /overleaf/libraries/logger/package.json
@@ -68,6 +73,7 @@ FROM deps AS dev
 ARG SENTRY_RELEASE
 ENV SENTRY_RELEASE=$SENTRY_RELEASE
 COPY libraries/access-token-encryptor/ /overleaf/libraries/access-token-encryptor/
+COPY libraries/config-system/ /overleaf/libraries/config-system/
 COPY libraries/eslint-plugin/ /overleaf/libraries/eslint-plugin/
 COPY libraries/fetch-utils/ /overleaf/libraries/fetch-utils/
 COPY libraries/logger/ /overleaf/libraries/logger/
@@ -108,6 +114,7 @@ RUN nice find /overleaf/services/web/public -name '*.js.map' -delete
 # copy source code and precompile pug images
 FROM deps-prod AS pug
 COPY libraries/access-token-encryptor/ /overleaf/libraries/access-token-encryptor/
+COPY libraries/config-system/ /overleaf/libraries/config-system/
 COPY libraries/eslint-plugin/ /overleaf/libraries/eslint-plugin/
 COPY libraries/fetch-utils/ /overleaf/libraries/fetch-utils/
 COPY libraries/logger/ /overleaf/libraries/logger/

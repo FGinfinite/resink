@@ -1,4 +1,5 @@
 import { Brand } from './helpers/brand'
+import { GroupSubscription } from './subscription/dashboard/subscription'
 
 export type RefProviders = {
   mendeley?: boolean
@@ -39,6 +40,12 @@ export type FeatureUsage = {
   }
 }
 
+export type ActiveProfessionalGroupSubscription = Pick<
+  GroupSubscription,
+  '_id'
+> &
+  Partial<Pick<GroupSubscription, 'teamName'>>
+
 export type User = {
   id: UserId
   isAdmin?: boolean
@@ -62,6 +69,8 @@ export type User = {
   planName?: string
   isAnnualPlan?: boolean
   isMemberOfGroupSubscription?: boolean
+  isProfessionalGroupPlan?: boolean
+  activeProfessionalGroupSubscriptions?: ActiveProfessionalGroupSubscription[]
   hasInstitutionLicence?: boolean
 }
 

@@ -2,10 +2,6 @@
   border: 0 !important;
 }
 
-.plans-2026 .ol-accordions-container .custom-accordion-item:last-of-type {
-  border-bottom: 1px solid var(--border-divider) !important;
-}
-
 .ol-accordions-container {
   .custom-accordion-item {
     width: 100%;
@@ -29,7 +25,7 @@
       .custom-accordion-icon {
         display: flex;
         align-items: center;
-        transition: transform var(--transition-slow) var(--ease-standard);
+        transition: transform 0.35s ease;
         margin-left: var(--spacing-08);
 
         .material-symbols {
@@ -40,6 +36,7 @@
       &:not(.collapsed) {
         .custom-accordion-icon {
           transform: rotate(180deg);
+          transition: transform 0.35s ease;
         }
       }
     }

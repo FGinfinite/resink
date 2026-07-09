@@ -249,9 +249,9 @@ describe('RequestParser', () => {
 
   describe('when the configured max compile timeout is reduced', () => {
     beforeEach(async ctx => {
-      ctx.settings.maxCompileTimeoutSeconds = 120
+      ctx.settings.maxCompileTimeoutSeconds = 12
       await new Promise((resolve, reject) => {
-        delete ctx.validRequest.compile.options.timeout
+        ctx.validRequest.compile.options.timeout = 99
         ctx.RequestParser.parse(ctx.validRequest, (error, data) => {
           if (error) return reject(error)
           ctx.data = data
@@ -260,9 +260,9 @@ describe('RequestParser', () => {
       })
     })
 
-    it('should use the configured maximum timeout', ctx => {
-      ctx.RequestParser.MAX_TIMEOUT.should.equal(120)
-      ctx.data.timeout.should.equal(120 * 1000)
+    it('should clamp the timeout to the configured maximum', ctx => {
+      ctx.data.timeout.should.equal(12000)
+      ctx.RequestParser.MAX_TIMEOUT.should.equal(12)
     })
   })
 

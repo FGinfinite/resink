@@ -1,5 +1,6 @@
 import React from 'react'
 import { AIAssistantProvider } from '@/features/ai-assistant/context/ai-assistant-context'
+import { AIStatusProvider } from '@/features/ai-assistant/context/ai-status-context'
 import {
   EditorProviders,
   EditorProvidersProps,
@@ -41,7 +42,9 @@ function AITestProviders({
     <EditorProviders {...editorProps}>
       <AICapabilitiesSetup enableAI={enableAI}>
         {enableAI ? (
-          <AIAssistantProvider>{children}</AIAssistantProvider>
+          <AIStatusProvider>
+            <AIAssistantProvider>{children}</AIAssistantProvider>
+          </AIStatusProvider>
         ) : (
           <>{children}</>
         )}

@@ -33,6 +33,12 @@ import { EditorSelectionProvider } from '@/shared/context/editor-selection-conte
 import importOverleafModules from '../../../../macros/import-overleaf-module.macro'
 import { TutorialProvider } from '@/shared/context/tutorial-context'
 import { TabsProvider } from './tabs-context'
+import {
+  AIAssistantProvider,
+  AIRailProvider,
+  AIStatusProvider,
+  AutocompleteStatusProvider,
+} from '@/features/ai-assistant'
 
 const rootContextProviders = importOverleafModules('rootContextProviders') as {
   import: { default: ElementType }
@@ -78,6 +84,10 @@ export const ReactContextRoot: FC<
     EditorSelectionProvider,
     TutorialProvider,
     TabsProvider,
+    AIAssistantProvider,
+    AIRailProvider,
+    AIStatusProvider,
+    AutocompleteStatusProvider,
     ...providers,
   }
 
@@ -113,37 +123,45 @@ export const ReactContextRoot: FC<
                                     <Providers.UserFeaturesProvider>
                                       <Providers.PermissionsProvider>
                                         <Providers.RailProvider>
-                                          <Providers.LayoutProvider>
-                                            <Providers.ProjectSettingsProvider>
-                                              <Providers.EditorManagerProvider>
-                                                <Providers.ReferencesProvider>
-                                                  <Providers.LocalCompileProvider>
-                                                    <Providers.DetachCompileProvider>
-                                                      <Providers.ChatProvider>
-                                                        <Providers.FileTreeOpenProvider>
-                                                          <Providers.TabsProvider>
-                                                            <Providers.OnlineUsersProvider>
-                                                              <Providers.MetadataProvider>
-                                                                <Providers.OutlineProvider>
-                                                                  <Providers.CommandRegistryProvider>
-                                                                    <Providers.EditorSelectionProvider>
-                                                                      {
-                                                                        childrenWrappedWithDynamicProviders
-                                                                      }
-                                                                    </Providers.EditorSelectionProvider>
-                                                                  </Providers.CommandRegistryProvider>
-                                                                </Providers.OutlineProvider>
-                                                              </Providers.MetadataProvider>
-                                                            </Providers.OnlineUsersProvider>
-                                                          </Providers.TabsProvider>
-                                                        </Providers.FileTreeOpenProvider>
-                                                      </Providers.ChatProvider>
-                                                    </Providers.DetachCompileProvider>
-                                                  </Providers.LocalCompileProvider>
-                                                </Providers.ReferencesProvider>
-                                              </Providers.EditorManagerProvider>
-                                            </Providers.ProjectSettingsProvider>
-                                          </Providers.LayoutProvider>
+                                          <Providers.AIRailProvider>
+                                            <Providers.AIStatusProvider>
+                                              <Providers.AutocompleteStatusProvider>
+                                                <Providers.AIAssistantProvider>
+                                                  <Providers.LayoutProvider>
+                                                    <Providers.ProjectSettingsProvider>
+                                                      <Providers.EditorManagerProvider>
+                                                        <Providers.ReferencesProvider>
+                                                          <Providers.LocalCompileProvider>
+                                                            <Providers.DetachCompileProvider>
+                                                              <Providers.ChatProvider>
+                                                                <Providers.FileTreeOpenProvider>
+                                                                  <Providers.TabsProvider>
+                                                                    <Providers.OnlineUsersProvider>
+                                                                      <Providers.MetadataProvider>
+                                                                        <Providers.OutlineProvider>
+                                                                          <Providers.CommandRegistryProvider>
+                                                                            <Providers.EditorSelectionProvider>
+                                                                              {
+                                                                                childrenWrappedWithDynamicProviders
+                                                                              }
+                                                                            </Providers.EditorSelectionProvider>
+                                                                          </Providers.CommandRegistryProvider>
+                                                                        </Providers.OutlineProvider>
+                                                                      </Providers.MetadataProvider>
+                                                                    </Providers.OnlineUsersProvider>
+                                                                  </Providers.TabsProvider>
+                                                                </Providers.FileTreeOpenProvider>
+                                                              </Providers.ChatProvider>
+                                                            </Providers.DetachCompileProvider>
+                                                          </Providers.LocalCompileProvider>
+                                                        </Providers.ReferencesProvider>
+                                                      </Providers.EditorManagerProvider>
+                                                    </Providers.ProjectSettingsProvider>
+                                                  </Providers.LayoutProvider>
+                                                </Providers.AIAssistantProvider>
+                                              </Providers.AutocompleteStatusProvider>
+                                            </Providers.AIStatusProvider>
+                                          </Providers.AIRailProvider>
                                         </Providers.RailProvider>
                                       </Providers.PermissionsProvider>
                                     </Providers.UserFeaturesProvider>

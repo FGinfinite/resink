@@ -54,6 +54,7 @@ const defaultTextExtensions = [
   'clo',
   'ldf',
   'rmd',
+  'qmd',
   'lua',
   'py',
   'gv',
@@ -113,6 +114,8 @@ const httpPermissionsPolicy = {
     'on-device-speech-recognition': 'self',
   },
 }
+
+const safeCompilers = ['xelatex', 'pdflatex', 'latex', 'lualatex']
 
 module.exports = {
   env: 'server-ce',
@@ -240,6 +243,9 @@ module.exports = {
         '127.0.0.1'
       }:3003`,
     },
+    geoIpLookup: {
+      cacheSize: intFromEnv('GEO_IP_LOOKUP_CACHE_SIZE', 10_000),
+    },
     docstore: {
       url: `http://${process.env.DOCSTORE_HOST || '127.0.0.1'}:3016`,
       pubUrl: `http://${process.env.DOCSTORE_HOST || '127.0.0.1'}:3016`,
@@ -254,12 +260,17 @@ module.exports = {
     },
     clsi: {
       url: `http://${process.env.CLSI_HOST || '127.0.0.1'}:3013`,
-      downloadHost: process.env.CLSI_LB_IP
-        ? `http://${process.env.CLSI_LB_IP}:80`
-        : `http://${process.env.DOWNLOAD_HOST || '127.0.0.1'}:8080`,
+      downloadHost:
+        process.env.CLSI_LB_IP || process.env.CLSI_LB_HOST
+          ? `http://${process.env.CLSI_LB_IP || process.env.CLSI_LB_HOST}:80`
+          : `http://${process.env.DOWNLOAD_HOST || '127.0.0.1'}:8080`,
       backendGroupName: undefined,
-      submissionBackendClass:
-        process.env.CLSI_SUBMISSION_BACKEND_CLASS || 'c3d',
+      submissionCompileBackendClass:
+        process.env.CLSI_SUBMISSION_COMPILE_BACKEND_CLASS || 'free',
+      standardCompileBackendClass:
+        process.env.CLSI_STANDARD_COMPILE_BACKEND_CLASS || 'free',
+      priorityCompileBackendClass:
+        process.env.CLSI_PRIORITY_COMPILE_BACKEND_CLASS || 'premium',
     },
     clsiCache: {
       instances: JSON.parse(process.env.CLSI_CACHE_INSTANCES || '[]'),
@@ -276,9 +287,6 @@ module.exports = {
     },
     realTime: {
       url: `http://${process.env.REALTIME_HOST || '127.0.0.1'}:3026`,
-    },
-    contacts: {
-      url: `http://${process.env.CONTACTS_HOST || '127.0.0.1'}:3036`,
     },
     notifications: {
       url: `http://${process.env.NOTIFICATIONS_HOST || '127.0.0.1'}:3042`,
@@ -347,10 +355,17 @@ module.exports = {
       clientId: process.env.GITHUB_OAUTH_CLIENT_ID,
       clientSecret: process.env.GITHUB_OAUTH_CLIENT_SECRET,
       callbackUrl: `${process.env.PUBLIC_URL || 'http://127.0.0.1:3000'}/auth/github/callback`,
-      authorizationURL: process.env.GITHUB_OAUTH_AUTHORIZATION_URL || 'https://github.com/login/oauth/authorize',
-      tokenURL: process.env.GITHUB_OAUTH_TOKEN_URL || 'https://github.com/login/oauth/access_token',
-      apiUserURL: process.env.GITHUB_OAUTH_API_USER_URL || 'https://api.github.com/user',
-      apiUserEmailsURL: process.env.GITHUB_OAUTH_API_USER_EMAILS_URL || 'https://api.github.com/user/emails',
+      authorizationURL:
+        process.env.GITHUB_OAUTH_AUTHORIZATION_URL ||
+        'https://github.com/login/oauth/authorize',
+      tokenURL:
+        process.env.GITHUB_OAUTH_TOKEN_URL ||
+        'https://github.com/login/oauth/access_token',
+      apiUserURL:
+        process.env.GITHUB_OAUTH_API_USER_URL || 'https://api.github.com/user',
+      apiUserEmailsURL:
+        process.env.GITHUB_OAUTH_API_USER_EMAILS_URL ||
+        'https://api.github.com/user/emails',
       requestTimeoutMs: intFromEnv('GITHUB_OAUTH_REQUEST_TIMEOUT_MS', 5000),
       userAgent: process.env.GITHUB_OAUTH_USER_AGENT || 'ResInk-AI',
     },
@@ -368,6 +383,7 @@ module.exports = {
 
   isCodeSpace: process.env.IS_CODE_SPACE === 'true',
   isDevEnv: process.env.NODE_ENV === 'development',
+  isCI: process.env.NODE_ENV === 'test',
 
   lockManager: {
     lockTestInterval: intFromEnv('LOCK_MANAGER_LOCK_TEST_INTERVAL', 50),
@@ -462,6 +478,15 @@ module.exports = {
 
   // featuresEpoch: 'YYYY-MM-DD',
 
+  personalAccessTokens: {
+    expiry: {
+      warningWindowDays: intFromEnv(
+        'PERSONAL_ACCESS_TOKEN_WARNING_WINDOW_DAYS',
+        2
+      ),
+    },
+  },
+
   features: {
     personal: defaultFeatures,
   },
@@ -505,23 +530,26 @@ module.exports = {
   aiAssistantUrl: process.env.AI_ASSISTANT_URL || 'http://localhost:3060/api/ai',
   aiAssistant: {
     proxySecret: process.env.AI_PROXY_SECRET || '',
-    // Whitelist of allowed hostnames for the AI Assistant proxy target.
-    // When set to a non-empty array, only these hostnames are permitted.
-    // When unset (undefined/null), the whitelist check is skipped entirely,
-    // which is the default for development environments.
-    // Production should set this to restrict proxy targets, e.g.:
-    //   allowedHosts: ['localhost', '127.0.0.1']
     allowedHosts: process.env.AI_ASSISTANT_ALLOWED_HOSTS
       ? process.env.AI_ASSISTANT_ALLOWED_HOSTS.split(',').map(h => h.trim())
       : undefined,
-    // SSE timeout must accommodate RunBudget wall time + ConfirmationChannel timeout + buffer
-    // Default: 40 min = 5 min wall time + 30 min confirmation + 5 min buffer
+    // SSE timeout must accommodate RunBudget wall time + confirmation timeout + buffer.
     sseTimeoutMs: parseInt(process.env.AI_SSE_TIMEOUT_MS, 10) || 2400000,
     proxyTimeoutMs: parseInt(process.env.AI_PROXY_TIMEOUT_MS, 10) || 60000,
     attachmentsBucket: process.env.AI_ATTACHMENTS_BUCKET || 'ai_attachments',
-    attachmentDownloadMaxSize: parseInt(process.env.AI_ATTACHMENT_DOWNLOAD_MAX_SIZE, 10) || 10485760,
-    projectFileDownloadMaxSize: parseInt(process.env.AI_PROJECT_FILE_DOWNLOAD_MAX_SIZE, 10) || 10485760,
+    attachmentUploadMaxSize:
+      parseInt(process.env.AI_ATTACHMENT_UPLOAD_MAX_SIZE, 10) || 5242880,
+    attachmentDownloadMaxSize:
+      parseInt(process.env.AI_ATTACHMENT_DOWNLOAD_MAX_SIZE, 10) || 10485760,
+    projectFileDownloadMaxSize:
+      parseInt(process.env.AI_PROJECT_FILE_DOWNLOAD_MAX_SIZE, 10) || 10485760,
   },
+  safeCompilers,
+  defaultLatexCompiler: safeCompilers.includes(
+    process.env.DEFAULT_LATEX_COMPILER
+  )
+    ? process.env.DEFAULT_LATEX_COMPILER
+    : 'pdflatex',
   enableSubscriptions: false,
   restrictedCountries: [],
   enableOnboardingEmails: process.env.ENABLE_ONBOARDING_EMAILS === 'true',
@@ -1081,6 +1109,7 @@ module.exports = {
     tprFileViewNotOriginalImporter: [],
     contactUsModal: [],
     sourceEditorExtensions: [],
+    sourceEditorVisualExtensions: [],
     sourceEditorComponents: [],
     pdfLogEntryHeaderActionComponents: [],
     pdfLogEntryComponents: [],
@@ -1089,11 +1118,14 @@ module.exports = {
     diagnosticActions: [],
     sourceEditorCompletionSources: [],
     sourceEditorSymbolPalette: [],
+    sourceEditorToolbarStartButtons: [],
+    sourceEditorToolbarButtonGroups: [],
     sourceEditorToolbarComponents: [],
     sourceEditorToolbarEndButtons: [],
     rootContextProviders: [],
     mainEditorLayoutModals: [],
     mainEditorLayoutPanels: [],
+    pythonRunner: [],
     langFeedbackLinkingWidgets: [],
     labsExperiments: [],
     integrationLinkingWidgets: [],
@@ -1103,6 +1135,7 @@ module.exports = {
     editorLeftMenuSync: [],
     editorLeftMenuManageTemplate: [],
     menubarExtraComponents: [],
+    insertMenuSections: [],
     oauth2Server: [],
     managedGroupSubscriptionEnrollmentNotification: [],
     managedGroupEnrollmentInvite: [],
@@ -1142,10 +1175,19 @@ module.exports = {
     ],
     integrationPanelComponents: [],
     referenceSearchSetting: [],
-    errorLogsComponents: [],
+    settingsModalEditorTabSections: [],
+    settingsModalSpellcheckSections: [],
+    editorFloatingMenuActions: [],
     referenceIndices: [],
-    railEntries: [],
+    railEntries: [
+      Path.resolve(
+        __dirname,
+        '../frontend/js/features/ai-assistant/rail-entry.tsx'
+      ),
+    ],
     railPopovers: [],
+    railActions: [],
+    railModals: [],
   },
 
   moduleImportSequence: [
@@ -1171,7 +1213,7 @@ module.exports = {
 
   unsupportedBrowsers: {
     ie: '<=11',
-    safari: '<=14',
+    safari: '<15',
     firefox: '<=78',
   },
 

@@ -72,6 +72,10 @@ const AIAssistantProxy = {
       changeOrigin: true,
       timeout: sseTimeoutMs, // default to SSE timeout as upper bound
       proxyTimeout: sseTimeoutMs,
+      pathRewrite(path) {
+        const relativePath = path.replace(/^\/api\/ai(?=\/|$)/, '')
+        return `/api/ai${relativePath || '/'}`
+      },
       // Fix request body after Express body-parser has consumed it
       onProxyReq(proxyReq, req, res) {
         // Set timeout based on whether this is an SSE request
@@ -84,9 +88,11 @@ const AIAssistantProxy = {
         // 移除敏感请求头，只透传必要头
         proxyReq.removeHeader('cookie')
         proxyReq.removeHeader('authorization')
-        // 清除用户可能自带的 x-user-id / x-user-is-admin，防止伪造
+        // 清除用户可能自带的 AI 信任头，防止伪造
         proxyReq.removeHeader('x-user-id')
+        proxyReq.removeHeader('x-user-sig')
         proxyReq.removeHeader('x-user-is-admin')
+        proxyReq.removeHeader('x-ai-proxy-secret')
         const userId = SessionManager.getLoggedInUserId(req.session)
         if (userId) {
           proxyReq.setHeader('x-user-id', userId)

@@ -1,5 +1,7 @@
 import { expect } from 'vitest'
 import { createRequire } from 'node:module'
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 const require = createRequire(import.meta.url)
 
@@ -55,7 +57,11 @@ describe('settings.defaults', function () {
     expect(settings.textExtensions).to.include('xyz')
   })
 
-  it('generates pricings with same structures', function () {
+  it.skipIf(
+    !existsSync(
+      resolve(import.meta.dirname, '../../../../config/settings.overrides.saas.js')
+    )
+  )('generates pricings with same structures', function () {
     const settingsOverridesSaas = require('../../../../config/settings.overrides.saas.js')
     const { localizedPlanPricing } = settingsOverridesSaas
 

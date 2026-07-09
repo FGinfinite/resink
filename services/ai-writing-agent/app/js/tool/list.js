@@ -3,6 +3,7 @@ import { Tool, ToolResult } from './Tool.js'
 import settings from '@overleaf/settings'
 
 const MAX_PATTERN_LENGTH = settings.list?.maxPatternLength || 200
+const GLOB_SPECIAL_CHARS_RE = /[.+^${}()|[\]\\]/g
 
 const listFilesSchema = z.object({
   pattern: z
@@ -43,6 +44,11 @@ Use type to show only documents or binary files.`,
   async execute(args, context) {
     const { pattern, type } = args
     const { adapters, projectId } = context
+    const sandboxSession = context.persistentWorkspace?.sandboxSession
+
+    if (sandboxSession) {
+      return this._executeWorkspace({ sandboxSession, pattern, type })
+    }
 
     if (!adapters.project) {
       return ToolResult.error(
@@ -134,6 +140,81 @@ Use type to show only documents or binary files.`,
       )
     }
   }
+
+  async _executeWorkspace({ sandboxSession, pattern, type }) {
+    try {
+      let files = await sandboxSession.listFiles('.')
+      files = files
+        .map(normalizeWorkspaceFile)
+        .filter(file => file.path && matchesType(file, type))
+        .filter(file => !pattern || matchesPattern(file.path, pattern))
+
+      if (files.length === 0) {
+        if (pattern) {
+          return ToolResult.success(
+            `No workspace files found matching pattern "${pattern}".`,
+            { count: 0, files: [], workspace: true }
+          )
+        }
+        return ToolResult.success('No workspace files found.', {
+          count: 0,
+          files: [],
+          workspace: true,
+        })
+      }
+
+      const lines = [`Workspace files (${files.length} total):`, '']
+      for (const file of files) {
+        const suffix = file.size != null ? ` (${file.size} bytes)` : ''
+        lines.push(`${file.type === 'doc' ? 'doc' : 'file'} ${file.path}${suffix}`)
+      }
+
+      return ToolResult.success(lines.join('\n'), {
+        count: files.length,
+        files,
+        workspace: true,
+      })
+    } catch (error) {
+      return ToolResult.error(
+        `Failed to list workspace files: ${error.message}`
+      )
+    }
+  }
+}
+
+function normalizeWorkspaceFile(file) {
+  const rawPath = typeof file === 'string' ? file : file.path || file.name
+  const normalizedPath = rawPath?.replace(/^\.\//, '')
+  const name = normalizedPath?.split('/').pop()
+  const type = file.type || inferWorkspaceFileType(normalizedPath)
+
+  return {
+    path: normalizedPath,
+    name,
+    type,
+    size: file.size,
+    mtime: file.mtime,
+    modifiedAt: file.modifiedAt,
+  }
+}
+
+function inferWorkspaceFileType(filePath = '') {
+  return /\.(tex|bib|cls|sty|md|txt|latexmkrc)$/i.test(filePath) ? 'doc' : 'file'
+}
+
+function matchesType(file, type) {
+  if (!type || type === 'all') return true
+  if (type === 'docs') return file.type === 'doc'
+  if (type === 'files') return file.type !== 'doc'
+  return true
+}
+
+function matchesPattern(filePath, pattern) {
+  const escaped = pattern.replace(GLOB_SPECIAL_CHARS_RE, '\\$&')
+  const regexPattern = escaped
+    .replace(/\*/g, '.*')
+    .replace(/\?/g, '.')
+  return new RegExp(`^${regexPattern}$`).test(filePath)
 }
 
 export function createListFilesTool() {

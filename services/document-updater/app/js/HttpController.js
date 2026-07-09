@@ -199,12 +199,21 @@ async function clearProjectState(req, res) {
 async function setDoc(req, res) {
   const docId = req.params.doc_id
   const projectId = req.params.project_id
-  const { lines, source, user_id: userId, undoing, expected_version: rawExpectedVersion } = req.body
-  // Validate expected_version: must be a non-negative integer when provided
-  if (rawExpectedVersion != null && !(Number.isInteger(rawExpectedVersion) && rawExpectedVersion >= 0)) {
+  const {
+    lines,
+    source,
+    user_id: userId,
+    undoing,
+    expected_version: rawExpectedVersion,
+  } = req.body
+  if (
+    rawExpectedVersion != null &&
+    !(Number.isInteger(rawExpectedVersion) && rawExpectedVersion >= 0)
+  ) {
     return res.status(400).json({ error: 'invalid expected_version' })
   }
-  const expectedVersion = rawExpectedVersion != null ? rawExpectedVersion : undefined
+  const expectedVersion =
+    rawExpectedVersion != null ? rawExpectedVersion : undefined
   const lineSize = getTotalSizeOfLines(lines)
 
   if (lineSize > Settings.max_doc_length) {
@@ -220,8 +229,9 @@ async function setDoc(req, res) {
   )
   const timer = new Metrics.Timer('http.setDoc')
 
+  let result
   try {
-    const result = await DocumentManager.promises.setDocWithLock(
+    result = await DocumentManager.promises.setDocWithLock(
       projectId,
       docId,
       lines,
@@ -233,7 +243,6 @@ async function setDoc(req, res) {
     )
     timer.done()
     logger.debug({ projectId, docId }, 'set doc via http')
-    res.json(result || {})
   } catch (error) {
     timer.done()
     if (error instanceof Errors.VersionMismatchError) {
@@ -246,6 +255,11 @@ async function setDoc(req, res) {
     }
     throw error
   }
+
+  // If the document is unchanged and hasn't been updated, `result` will be
+  // undefined, which leads to an invalid JSON response, so we send an empty
+  // object instead.
+  res.json(result || {})
 }
 
 async function appendToDoc(req, res) {

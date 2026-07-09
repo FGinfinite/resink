@@ -26,6 +26,11 @@ import type {
   CompactSessionResponse,
   AttachmentInfo,
   ModelSlotInfo,
+  GetTeamRunResponse,
+  ListTeamRunsResponse,
+  RetryTeamRunTaskResponse,
+  AgentTeamRun,
+  AgentTeamSummary,
 } from '../types/ai-types'
 
 // Base URL for AI API - always use the web proxy path
@@ -253,6 +258,55 @@ export async function updateSession(
     { body: { title } }
   )
   return response.title
+}
+
+// ============================================================================
+// Agent Team Runs
+// ============================================================================
+
+export async function getTeamRun(
+  sessionId: string,
+  teamId: string
+): Promise<AgentTeamRun> {
+  const baseUrl = getAIBaseUrl()
+  const response = await getJSON<GetTeamRunResponse>(
+    `${baseUrl}/sessions/${sessionId}/team-runs/${teamId}`
+  )
+  return response.teamRun
+}
+
+export async function listTeamRuns(
+  sessionId: string
+): Promise<AgentTeamSummary[]> {
+  const baseUrl = getAIBaseUrl()
+  const response = await getJSON<ListTeamRunsResponse>(
+    `${baseUrl}/sessions/${sessionId}/team-runs`
+  )
+  return response.teamRuns
+}
+
+export async function cancelTeamRun(
+  sessionId: string,
+  teamId: string
+): Promise<AgentTeamRun> {
+  const baseUrl = getAIBaseUrl()
+  const response = await postJSON<GetTeamRunResponse>(
+    `${baseUrl}/sessions/${sessionId}/team-runs/${teamId}/cancel`,
+    { body: { reason: 'user-cancelled' } }
+  )
+  return response.teamRun
+}
+
+export async function retryTeamRunTask(
+  sessionId: string,
+  teamId: string,
+  taskId: string
+): Promise<RetryTeamRunTaskResponse> {
+  const baseUrl = getAIBaseUrl()
+  return postJSON<RetryTeamRunTaskResponse>(
+    `${baseUrl}/sessions/${sessionId}/team-runs/${teamId}/tasks/${taskId}/retry`,
+    { body: {} }
+  )
 }
 
 // ============================================================================

@@ -27,5 +27,10 @@ Thumbs.db
 *.log
 npm-debug.log*
 
+# Local Docker sandbox workspaces
+.sandboxes/
+.broker-workspaces/
+.python-env-store/
+
 # Manual test credentials (contains session cookies)
 test/manual/.credentials

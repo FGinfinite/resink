@@ -17,10 +17,13 @@ import {
   DropdownMenu,
   DropdownToggle,
 } from '@/shared/components/dropdown/dropdown-menu'
+import type { DropdownProps } from '@/shared/components/types/dropdown-menu-props'
 import { useSendProjectListMB } from '@/features/project-list/components/project-list-events'
 import type { PortalTemplate } from '../../../../../types/portal-template'
 import { useFeatureFlag } from '@/shared/context/split-test-context'
 import MaterialIcon from '@/shared/components/material-icon'
+import { useProjectListContext } from '@/features/project-list/context/project-list-context'
+import { isSplitTestEnabled } from '@/utils/splitTestUtils'
 
 type SendTrackingEvent = {
   dropdownMenu: string
@@ -43,6 +46,7 @@ type NewProjectButtonProps = {
   className?: string
   trackingKey?: string
   showAddAffiliationWidget?: boolean
+  align?: DropdownProps['align']
 }
 
 function NewProjectButton({
@@ -51,6 +55,7 @@ function NewProjectButton({
   className,
   trackingKey,
   showAddAffiliationWidget,
+  align,
 }: NewProjectButtonProps) {
   const { t } = useTranslation()
   const { templateLinks } = getMeta('ol-ExposedSettings')
@@ -62,6 +67,15 @@ function NewProjectButton({
   const docxImportEnabled =
     useFeatureFlag('import-docx') &&
     getMeta('ol-ExposedSettings').enablePandocConversions
+  const markdownImportEnabled =
+    useFeatureFlag('import-markdown') &&
+    getMeta('ol-ExposedSettings').enablePandocConversions
+  const { selectedTagId, tags } = useProjectListContext()
+  const isLibraryEnabled = isSplitTestEnabled('overleaf-library')
+  const initialTags =
+    isLibraryEnabled && selectedTagId
+      ? tags.filter(tag => tag._id === selectedTagId)
+      : []
   const sendTrackingEvent = useCallback(
     ({
       dropdownMenu,
@@ -163,6 +177,7 @@ function NewProjectButton({
   return (
     <>
       <Dropdown
+        align={align}
         className={classnames('new-project-dropdown', className)}
         onSelect={handleMainButtonClick}
         onToggle={nextShow => {
@@ -225,6 +240,21 @@ function NewProjectButton({
                 trailingIcon={<MaterialIcon type="fiber_new" />}
               >
                 {t('import_word_document')}
+              </DropdownItem>
+            </li>
+          )}
+          {markdownImportEnabled && (
+            <li role="none">
+              <DropdownItem
+                onClick={e =>
+                  handleModalMenuClick(e, {
+                    modalVariant: 'import_markdown',
+                    dropdownMenuEvent: 'import-markdown',
+                  })
+                }
+                trailingIcon={<MaterialIcon type="fiber_new" />}
+              >
+                {t('import_markdown_file')}
               </DropdownItem>
             </li>
           )}
@@ -292,7 +322,11 @@ function NewProjectButton({
           ) : null}
         </DropdownMenu>
       </Dropdown>
-      <NewProjectButtonModal modal={modal} onHide={() => setModal(null)} />
+      <NewProjectButtonModal
+        modal={modal}
+        onHide={() => setModal(null)}
+        initialTags={initialTags}
+      />
     </>
   )
 }

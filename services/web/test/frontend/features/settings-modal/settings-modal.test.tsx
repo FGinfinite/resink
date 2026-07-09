@@ -117,7 +117,7 @@ describe('<SettingsModal />', function () {
     render(
       <EditorProviders
         rootFolder={[rootFolder as any]}
-        layoutContext={{ leftMenuShown: true }}
+        layoutContext={{ settingsShown: true }}
       >
         <SettingsModal />
       </EditorProviders>
@@ -126,6 +126,133 @@ describe('<SettingsModal />', function () {
     Object.entries(TAB_SETTINGS).forEach(([tabName, settings]) => {
       selectTab(tabName)
       settings.forEach(setting => assertSettingIsVisible(setting))
+    })
+  })
+
+  describe('when a user has Writefull enabled', function () {
+    beforeEach(function () {
+      window.metaAttributesCache.set('ol-writefullEnabled', true)
+      window.metaAttributesCache.set('ol-showAiFeatures', true)
+    })
+
+    afterEach(function () {
+      window.metaAttributesCache.delete('ol-writefullEnabled')
+      window.metaAttributesCache.delete('ol-showAiFeatures')
+    })
+
+    it('shows the AI assistance section in the Editor tab', async function () {
+      render(
+        <EditorProviders
+          rootFolder={[rootFolder as any]}
+          layoutContext={{ settingsShown: true }}
+        >
+          <SettingsModal />
+        </EditorProviders>
+      )
+
+      selectTab('Editor')
+      await waitFor(() => expect(screen.getByText('AI assistance')).to.exist)
+    })
+
+    it('shows the Language Suggestions section in the Spelling and language tab', async function () {
+      render(
+        <EditorProviders
+          rootFolder={[rootFolder as any]}
+          layoutContext={{ settingsShown: true }}
+        >
+          <SettingsModal />
+        </EditorProviders>
+      )
+
+      selectTab('Spelling and language')
+      await waitFor(
+        () => expect(screen.getByText('Language suggestions')).to.exist
+      )
+    })
+  })
+
+  describe('when a user does not have Writefull enabled', function () {
+    afterEach(function () {
+      window.metaAttributesCache.delete('ol-writefullEnabled')
+      window.metaAttributesCache.delete('ol-showAiFeatures')
+      window.metaAttributesCache.delete('ol-cannot-use-ai')
+    })
+
+    it('does not show the AI assistance section when ol-writefullEnabled is false', async function () {
+      window.metaAttributesCache.set('ol-writefullEnabled', false)
+      window.metaAttributesCache.set('ol-showAiFeatures', true)
+      render(
+        <EditorProviders
+          rootFolder={[rootFolder as any]}
+          layoutContext={{ settingsShown: true }}
+        >
+          <SettingsModal />
+        </EditorProviders>
+      )
+
+      selectTab('Editor')
+      await waitFor(
+        () => expect(screen.getByLabelText('Auto-complete')).to.exist
+      )
+      expect(screen.queryByText('AI assistance')).to.be.null
+    })
+
+    it('does not show the Language Suggestions section when ol-writefullEnabled is false', async function () {
+      window.metaAttributesCache.set('ol-writefullEnabled', false)
+      window.metaAttributesCache.set('ol-showAiFeatures', true)
+      render(
+        <EditorProviders
+          rootFolder={[rootFolder as any]}
+          layoutContext={{ settingsShown: true }}
+        >
+          <SettingsModal />
+        </EditorProviders>
+      )
+
+      selectTab('Spelling and language')
+      await waitFor(
+        () => expect(screen.getByLabelText('Spellcheck language')).to.exist
+      )
+      expect(screen.queryByText('Language suggestions')).to.be.null
+    })
+
+    it('does not show the AI assistance section when ol-showAiFeatures is false', async function () {
+      window.metaAttributesCache.set('ol-writefullEnabled', true)
+      window.metaAttributesCache.set('ol-showAiFeatures', false)
+      render(
+        <EditorProviders
+          rootFolder={[rootFolder as any]}
+          layoutContext={{ settingsShown: true }}
+        >
+          <SettingsModal />
+        </EditorProviders>
+      )
+
+      selectTab('Editor')
+      await waitFor(
+        () => expect(screen.getByLabelText('Auto-complete')).to.exist
+      )
+      expect(screen.queryByText('AI assistance')).to.be.null
+    })
+
+    it('does not show the AI assistance section when ol-cannot-use-ai is true', async function () {
+      window.metaAttributesCache.set('ol-writefullEnabled', true)
+      window.metaAttributesCache.set('ol-showAiFeatures', true)
+      window.metaAttributesCache.set('ol-cannot-use-ai', true)
+      render(
+        <EditorProviders
+          rootFolder={[rootFolder as any]}
+          layoutContext={{ settingsShown: true }}
+        >
+          <SettingsModal />
+        </EditorProviders>
+      )
+
+      selectTab('Editor')
+      await waitFor(
+        () => expect(screen.getByLabelText('Auto-complete')).to.exist
+      )
+      expect(screen.queryByText('AI assistance')).to.be.null
     })
   })
 

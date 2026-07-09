@@ -388,15 +388,15 @@ const createChangeRange = (change: Change, data: RangesData) => {
 
 const trackChangesTheme = EditorView.baseTheme({
   '.ol-cm-change-i, .ol-cm-change-highlight-i, .ol-cm-change-focus-i': {
-    backgroundColor: 'color-mix(in srgb, var(--tc-insert, #2c8e30) 30%, transparent)',
+    backgroundColor: 'rgba(44, 142, 48, 0.30)',
   },
   '&light .ol-cm-change-c, &light .ol-cm-change-highlight-c, &light .ol-cm-change-focus-c':
     {
-      backgroundColor: 'color-mix(in srgb, var(--tc-comment, #f3b111) 30%, transparent)',
+      backgroundColor: 'rgba(243, 177, 17, 0.30)',
     },
   '&dark .ol-cm-change-c, &dark .ol-cm-change-highlight-c, &dark .ol-cm-change-focus-c':
     {
-      backgroundColor: 'color-mix(in srgb, var(--tc-comment-dark, #c25d0b) 15%, transparent)',
+      backgroundColor: 'rgba(194, 93, 11, 0.15)',
     },
   '.ol-cm-change-focus .ol-cm-change': {
     backgroundColor: 'transparent',
@@ -411,19 +411,19 @@ const trackChangesTheme = EditorView.baseTheme({
     padding: 'var(--half-leading, 0) 0',
   },
   '&light .ol-cm-change-d': {
-    borderLeft: '2px dotted var(--tc-delete, #c5060b)',
+    borderLeft: '2px dotted #c5060b',
     marginLeft: '-1px',
   },
   '&dark .ol-cm-change-d': {
-    borderLeft: '2px dotted var(--tc-delete, #c5060b)',
+    borderLeft: '2px dotted #c5060b',
     marginLeft: '-1px',
   },
   '&light .ol-cm-change-d-highlight': {
-    borderLeft: '3px solid var(--tc-delete, #c5060b)',
+    borderLeft: '3px solid #c5060b',
     marginLeft: '-2px',
   },
   '&dark .ol-cm-change-d-highlight': {
-    borderLeft: '3px solid var(--tc-delete, #c5060b)',
+    borderLeft: '3px solid #c5060b',
     marginLeft: '-2px',
   },
 })

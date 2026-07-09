@@ -21,9 +21,6 @@
 @import 'editor/file-view';
 @import 'editor/figure-modal';
 @import 'editor/chat';
-@import 'editor/ai-assistant';
-@import 'editor/brand-identity';
-@import 'editor/right-rail';
 @import 'editor/toast';
 @import 'editor/history';
 @import 'editor/write-and-cite';
@@ -35,12 +32,14 @@
 @import 'editor/tabs';
 @import 'editor/tags-input';
 @import 'editor/review-panel';
+@import 'editor/editor-floating-menu';
 @import 'editor/table-generator-column-width-modal';
 @import 'editor/math-preview';
 @import 'editor/references-search';
 @import 'editor/editor-survey';
 @import 'editor/themed-tooltip';
 @import 'editor/new-editor-promo-modal';
+@import 'editor/command-palette';
 @import 'error-pages';
 @import 'website-redesign';
 @import 'group-settings';

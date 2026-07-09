@@ -43,6 +43,13 @@ describe('UserAuditLogHandler', function () {
       UserAuditLogEntry,
     }))
 
+    ctx.Features = {
+      hasFeature: sinon.stub().withArgs('saas').returns(true),
+    }
+    vi.doMock('../../../../app/src/infrastructure/Features', () => ({
+      default: ctx.Features,
+    }))
+
     ctx.UserAuditLogHandler = (await import(MODULE_PATH)).default
   })
 

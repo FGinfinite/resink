@@ -1,5 +1,7 @@
 import { db, ObjectId, allocateSeq } from '../mongodb.js'
 import { buildSystemPrompt } from '../prompt/system.js'
+import { SessionSummaryService } from '../agent-context/SessionSummaryService.js'
+import { MemorySuggestionService } from '../agent-context/MemorySuggestionService.js'
 import settings from '@overleaf/settings'
 import logger from '@overleaf/logger'
 
@@ -16,6 +18,39 @@ const CONTROL_CHAR_RE = /[\x00-\x09\x0b-\x1f\x7f]/g
 
 function sanitizeSummary(text) {
   return String(text || '').replace(CONTROL_CHAR_RE, '').trim().slice(0, MAX_SUMMARY_LEN)
+}
+
+function estimateTokens(text) {
+  return Math.ceil(String(text || '').length / 4)
+}
+
+function summarizeSourceRange(history) {
+  const seqs = history
+    .map(message => message.seq)
+    .filter(seq => Number.isInteger(seq))
+  if (seqs.length === 0) return { fromSeq: 0, toSeq: 0 }
+  return {
+    fromSeq: Math.min(...seqs),
+    toSeq: Math.max(...seqs),
+  }
+}
+
+function extractPreferenceCandidate(summary) {
+  const text = sanitizeSummary(summary)
+  if (!text) return null
+  const lower = text.toLowerCase()
+  const markers = [
+    'prefer',
+    'preference',
+    'prefers',
+    '用户偏好',
+    '用户希望',
+    '要求',
+  ]
+  if (!markers.some(marker => lower.includes(marker.toLowerCase()))) {
+    return null
+  }
+  return text.slice(0, 2000)
 }
 
 const COMPACTION_PROMPT = `你是一个对话摘要助手。请将以下对话历史压缩为一份简洁的工作摘要。
@@ -46,6 +81,10 @@ export class ContextManager {
     // History length is managed by compaction + emergencyTruncate.
     this.maxHistoryMessages = options.maxHistoryMessages || settings.memory?.maxHistoryMessages || 50
     this.maxContextLength = options.maxContextLength || settings.memory?.maxContextLength || 100000
+    this.sessionSummaryService =
+      options.sessionSummaryService || new SessionSummaryService()
+    this.memorySuggestionService =
+      options.memorySuggestionService || new MemorySuggestionService()
   }
 
   /**
@@ -85,16 +124,6 @@ export class ContextManager {
     // (executed by AgentLoop._executeSelectionReads to populate sessionState.readDocuments)
     if (context._syntheticReadMessages?.length > 0) {
       messages.push(...context._syntheticReadMessages)
-    }
-
-    // Inject synthetic activate_skill results if a skill is active
-    if (context.skill && context._skillRegistry) {
-      messages.push(
-        ...this._buildSyntheticSkillMessages(
-          context.skill,
-          context._skillRegistry
-        )
-      )
     }
 
     return messages
@@ -576,42 +605,6 @@ export class ContextManager {
   }
 
   /**
-   * Build synthetic assistant(tool_calls) + tool(result) message pairs
-   * for an activated skill, mimicking activate_skill tool call results.
-   * @param {string} skillName - Name of the skill to activate
-   * @param {import('../skill/SkillRegistry.js').SkillRegistry} skillRegistry - Skill registry
-   * @returns {Array} Messages to inject into conversation
-   */
-  _buildSyntheticSkillMessages(skillName, skillRegistry) {
-    const skill = skillRegistry.get(skillName)
-    if (!skill) return []
-
-    const toolCallId = `ref-skill-${skillName}`
-
-    return [
-      {
-        role: 'assistant',
-        content: null,
-        tool_calls: [
-          {
-            id: toolCallId,
-            type: 'function',
-            function: {
-              name: 'activate_skill',
-              arguments: JSON.stringify({ name: skillName }),
-            },
-          },
-        ],
-      },
-      {
-        role: 'tool',
-        tool_call_id: toolCallId,
-        content: skill.body,
-      },
-    ]
-  }
-
-  /**
    * Check if context needs compaction based on usage data
    * @param {object} usage - LLM API usage data
    * @param {object} compactionConfig - compaction configuration
@@ -647,11 +640,16 @@ export class ContextManager {
    */
   async compactHistory(sessionId, llmAdapter, compactionConfig, options = {}) {
     const sessionOid = new ObjectId(sessionId)
+    const session = await db.aiSessions.findOne(
+      { _id: sessionOid },
+      { projection: { projectId: 1, userId: 1, _latestSummarySeq: 1 } }
+    )
 
     // Check if there are enough messages to compact
     const msgCount = await db.aiMessages.countDocuments({ sessionId: sessionOid })
     if (msgCount < 4) return { success: false }
 
+    const sourceRange = await this.getCompactionSourceRange(sessionOid, session)
     const history = await this.getConversationHistory(sessionId)
     if (history.length < 4) return { success: false }
 
@@ -703,7 +701,50 @@ export class ContextManager {
       { $unset: { toolContext: '' } }
     )
 
+    if (session?.projectId && session?.userId) {
+      await this.sessionSummaryService.createSummary({
+        sessionId,
+        projectId: session.projectId?.toString?.() || session.projectId,
+        userId: session.userId?.toString?.() || session.userId,
+        summary: wrappedSummary,
+        sourceMessageRange: sourceRange,
+        tokenEstimate: estimateTokens(wrappedSummary),
+      })
+
+      if (options.proposeMemorySuggestions || compactionConfig.proposeMemorySuggestions) {
+        await this.proposeMemorySuggestionFromSummary({
+          sessionId,
+          projectId: session.projectId?.toString?.() || session.projectId,
+          userId: session.userId?.toString?.() || session.userId,
+          summary: sanitized,
+        })
+      }
+    }
+
     return { success: true, summary: wrappedSummary, usage: result.usage || null }
+  }
+
+  async proposeMemorySuggestionFromSummary(input) {
+    const proposedContent = extractPreferenceCandidate(input.summary)
+    if (!proposedContent) return null
+    return this.memorySuggestionService.createSuggestion({
+      userId: input.userId,
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+      messageId: null,
+      proposedContent,
+      scope: 'project',
+      reason: 'compaction-summary preference candidate',
+    })
+  }
+
+  async getCompactionSourceRange(sessionOid, session) {
+    const minSeq = session?._latestSummarySeq || 0
+    const messages = await db.aiMessages
+      .find({ sessionId: sessionOid, seq: { $gte: minSeq } })
+      .sort({ seq: 1 })
+      .toArray()
+    return summarizeSourceRange(messages)
   }
 
   /**

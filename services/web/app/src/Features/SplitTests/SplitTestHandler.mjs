@@ -7,7 +7,7 @@ import _ from 'lodash'
 import { callbackify } from 'node:util'
 import SplitTestCache from './SplitTestCache.mjs'
 import { SplitTest } from '../../models/SplitTest.mjs'
-import UserAnalyticsIdCache from '../Analytics/UserAnalyticsIdCache.mjs'
+import UserAnalyticsDataCache from '../Analytics/UserAnalyticsDataCache.mjs'
 import Features from '../../infrastructure/Features.mjs'
 import SplitTestUtils from './SplitTestUtils.mjs'
 import Settings from '@overleaf/settings'
@@ -18,6 +18,7 @@ import SplitTestUserGetter from './SplitTestUserGetter.mjs'
 
 /**
  * @import { Assignment } from "./types"
+ * @import { SplitTestUser } from "./SplitTestUserGetter"
  */
 
 const DEFAULT_VARIANT = 'default'
@@ -47,11 +48,18 @@ const DEFAULT_ASSIGNMENT = {
  * @param req the request
  * @param res the Express response object
  * @param splitTestName the unique name of the split test
- * @param options {Object<sync: boolean>} - for test purposes only, to force the synchronous update of the user's profile
+ * @param {Object} [options]
+ * @param {boolean} [options.sync] - for test purposes only, to force the synchronous update of the user's profile
+ * @param {boolean} [options.includeReferer] For ajax requests and downloads include the split test overrides of the page
+ * @param {boolean} [options.ignoreOverrides] Ignore query-string variant overrides (e.g. for backend gating where the user must not be able to force a variant)
  * @returns {Promise<Assignment>}
  */
-async function getAssignment(req, res, splitTestName, { sync = false } = {}) {
-  const query = req.query || {}
+async function getAssignment(
+  req,
+  res,
+  splitTestName,
+  { sync = false, includeReferer = false, ignoreOverrides = false } = {}
+) {
   let assignment
 
   try {
@@ -60,14 +68,30 @@ async function getAssignment(req, res, splitTestName, { sync = false } = {}) {
     } else {
       await _loadSplitTestInfoInLocals(res.locals, splitTestName, req.session)
 
-      // Check the query string for an override, ignoring an invalid value
-      const queryVariant = query[splitTestName]
-      if (queryVariant) {
-        const variants = await _getVariantNames(splitTestName)
-        if (variants.includes(queryVariant)) {
-          assignment = {
-            variant: queryVariant,
-            metadata: {},
+      if (!ignoreOverrides) {
+        let query = req.query || {}
+        if (includeReferer && req.headers.referer) {
+          // Pick up the query of the top-level page, i.e. what's in the browsers address bar, from ajax requests.
+          // E.g. /project/:id?split-test=foo -> ajax /project/:id/compile should see split-test=foo.
+          // E.g. /project/:id?split-test=foo -> redirect /project/:id/download/zip should see split-test=foo.
+          try {
+            const u = new URL(req.headers.referer, Settings.siteUrl)
+            query = {
+              ...Object.fromEntries(u.searchParams.entries()),
+              ...query,
+            }
+          } catch {}
+        }
+
+        // Check the query string for an override, ignoring an invalid value
+        const queryVariant = query[splitTestName]
+        if (queryVariant) {
+          const variants = await _getVariantNames(splitTestName)
+          if (variants.includes(queryVariant)) {
+            assignment = {
+              variant: queryVariant,
+              metadata: {},
+            }
           }
         }
       }
@@ -120,11 +144,38 @@ async function getAssignmentForUser(
       return _getNonSaasAssignment(splitTestName)
     }
 
-    const analyticsId = await UserAnalyticsIdCache.getWithMetrics(
+    const analyticsId = await UserAnalyticsDataCache.getAnalyticsId(
       userId,
       `getAssignmentForUser:${splitTestName}`
     )
     return _getAssignment(splitTestName, { analyticsId, userId, sync })
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to get split test assignment for user')
+    return DEFAULT_ASSIGNMENT
+  }
+}
+
+/**
+ * Get the assignment of a user to a split test from an already-fetched mongo user.
+ *
+ * The user must include all the relevant fields. Unless you fetch the full user record, add `SplitTestUserGetter.getProjection(splitTestName)` to the projection.
+ *
+ * @param {SplitTestUser} user an already-fetched mongo user
+ * @param splitTestName the unique name of the split test
+ * @param options {Object<sync: boolean>} - for test purposes only, to force the synchronous update of the user's profile
+ * @returns {Promise<Assignment>}
+ */
+async function getAssignmentForMongoUser(
+  user,
+  splitTestName,
+  { sync = false } = {}
+) {
+  const { userId, analyticsId } = _getIdsFromMongoUser(user) // throw outside the try/catch.
+  try {
+    if (!Features.hasFeature('saas')) {
+      return _getNonSaasAssignment(splitTestName)
+    }
+    return _getAssignment(splitTestName, { analyticsId, userId, user, sync })
   } catch (error) {
     logger.error({ err: error }, 'Failed to get split test assignment for user')
     return DEFAULT_ASSIGNMENT
@@ -239,13 +290,33 @@ async function getActiveAssignmentsForUser(
     return {}
   }
 
+  return getActiveAssignmentsForMongoUser(user, removeArchived, ignoreVersion)
+}
+
+/**
+ * Get a mapping of the active split test assignments from an already-fetched mongo user, avoiding a re-fetch. This should be the full user record.
+ * @param {SplitTestUser} user
+ * @param {boolean} removeArchived
+ * @param {boolean} ignoreVersion
+ */
+async function getActiveAssignmentsForMongoUser(
+  user,
+  removeArchived = false,
+  ignoreVersion = false
+) {
+  if (!Features.hasFeature('saas')) {
+    return {}
+  }
+
+  const { analyticsId } = _getIdsFromMongoUser(user) // throw early.
+
   const splitTests = (await SplitTestCache.get('')).values()
   const assignments = {}
   for (const splitTest of splitTests) {
     if (!splitTest.versions[splitTest.versions.length - 1].active) continue
     if (removeArchived && splitTest.archived) continue
     const { activeForUser, selectedVariantName, phase, versionNumber } =
-      await _getAssignmentMetadata(user.analyticsId, user, splitTest)
+      await _getAssignmentMetadata(analyticsId, user, splitTest)
     if (activeForUser) {
       const assignment = {
         variantName: selectedVariantName,
@@ -318,12 +389,50 @@ async function getOneTimeAssignment(splitTestName) {
  *
  * Retrieves the feature flag assignment for a user and determines if the assigned variant is 'enabled'
  *
+ * @param req the request
+ * @param res the Express response object
+ * @param {string} splitTestName - The unique name of the feature flag
+ * @param {Object} options
+ * @param {boolean} options.includeReferer For ajax requests and downloads include the split test overrides of the page
+ * @returns {Promise<boolean>} True if the user's assigned variant is 'enabled', false otherwise
+ */
+async function featureFlagEnabled(
+  req,
+  res,
+  splitTestName,
+  { includeReferer = false } = { includeReferer: false }
+) {
+  const { variant } = await getAssignment(req, res, splitTestName, {
+    includeReferer,
+  })
+  return variant === 'enabled'
+}
+
+/**
+ * Checks if a feature flag is enabled for a specific user
+ *
+ * Retrieves the feature flag assignment for a user and determines if the assigned variant is 'enabled'
+ *
  * @param {string} userId - The ID of the user to check the feature flag for
  * @param {string} splitTestName - The unique name of the feature flag
  * @returns {Promise<boolean>} True if the user's assigned variant is 'enabled', false otherwise
  */
 async function featureFlagEnabledForUser(userId, splitTestName) {
   const { variant } = await getAssignmentForUser(userId, splitTestName)
+  return variant === 'enabled'
+}
+
+/**
+ * Checks if a feature flag is enabled from an already-fetched mongo user
+ *
+ * See getAssignmentForMongoUser for details on the user.
+ *
+ * @param {SplitTestUser} user an already-fetched mongo user
+ * @param {string} splitTestName - The unique name of the feature flag
+ * @returns {Promise<boolean>} True if the user's assigned variant is 'enabled', false otherwise
+ */
+async function featureFlagEnabledForMongoUser(user, splitTestName) {
+  const { variant } = await getAssignmentForMongoUser(user, splitTestName)
   return variant === 'enabled'
 }
 
@@ -342,6 +451,28 @@ async function _getVariantNames(splitTestName) {
   } else {
     return [DEFAULT_VARIANT]
   }
+}
+
+/**
+ * Extract the ids needed for a split test assignment from an already-fetched
+ * mongo user, throwing if a required field is missing from the projection.
+ *
+ * Only the ids are validated: the program/`splitTests` fields are read with
+ * optional chaining and a missing value is a legitimate "not enrolled" state.
+ *
+ * @param {SplitTestUser} user
+ * @return {{userId: string, analyticsId: string}}
+ */
+function _getIdsFromMongoUser(user) {
+  const userId = user?._id?.toString()
+  if (!userId) {
+    throw new Error('bug: include db.users._id in projection')
+  }
+  const analyticsId = user?.analyticsId
+  if (!analyticsId) {
+    throw new Error('bug: include db.users.analyticsId in projection')
+  }
+  return { userId, analyticsId }
 }
 
 async function _getAssignment(
@@ -705,7 +836,7 @@ async function _recordAssignment({
  * @param {string} splitTestName - The name of the split test
  * @param {string} variantName - The name of the variant
  * @param {string} phase - The phase of the split test
- * @param {Object} user - The user object
+ * @param {SplitTestUser} user - The user object
  * @returns {Promise<boolean>} Whether the counter should be incremented
  */
 async function _shouldIncrementVariantCounter(
@@ -784,6 +915,27 @@ async function _loadSplitTestInfoInLocals(locals, splitTestName, session) {
       phase,
       badgeInfo: splitTest.badgeInfo?.[phase],
     }
+
+    if (phase === 'labs') {
+      const variant = currentVersion.variants?.[0]
+      info.labsDetails = {
+        title: splitTest.labsTitle || '',
+        description: splitTest.labsDescription || '',
+        icon: splitTest.labsIcon || '',
+        surveyLink: splitTest.badgeInfo?.labs?.url || '',
+        successNotification: {
+          content: splitTest.labsSuccessNotification?.content || '',
+          buttonLabel: splitTest.labsSuccessNotification?.buttonLabel || '',
+          buttonUrl: splitTest.labsSuccessNotification?.buttonUrl || '',
+        },
+        isFull: SplitTestUtils.isExperimentFull(variant),
+        versionCreatedAt:
+          currentVersion.createdAt instanceof Date
+            ? currentVersion.createdAt.toISOString()
+            : currentVersion.createdAt,
+      }
+    }
+
     if (Settings.devToolbar.enabled) {
       info.active = currentVersion.active
       info.variants = currentVersion.variants.map(variant => ({
@@ -958,24 +1110,50 @@ async function decrementLabsVariantCounter(splitTestName) {
   }
 }
 
+async function userMaintenanceOnLogin(user) {
+  const splitTests = (await SplitTestCache.get('')).values()
+  const toCleanup = {}
+  for (const splitTest of splitTests) {
+    if (splitTest.archived && user.splitTests?.[splitTest.name]) {
+      toCleanup[`splitTests.${splitTest.name}`] = 1
+    }
+  }
+  if (Object.keys(toCleanup).length > 0) {
+    await UserUpdater.promises.updateUser(user._id, {
+      $unset: toCleanup,
+    })
+  }
+}
+
 export default {
   getPercentile,
   getAssignment: callbackify(getAssignment),
   getAssignmentForUser: callbackify(getAssignmentForUser),
+  getAssignmentForMongoUser: callbackify(getAssignmentForMongoUser),
+  featureFlagEnabled: callbackify(featureFlagEnabled),
   featureFlagEnabledForUser: callbackify(featureFlagEnabledForUser),
+  featureFlagEnabledForMongoUser: callbackify(featureFlagEnabledForMongoUser),
   getOneTimeAssignment: callbackify(getOneTimeAssignment),
   getActiveAssignmentsForUser: callbackify(getActiveAssignmentsForUser),
+  getActiveAssignmentsForMongoUser: callbackify(
+    getActiveAssignmentsForMongoUser
+  ),
   hasUserBeenAssignedToVariant: callbackify(hasUserBeenAssignedToVariant),
   setOverrideInSession,
   clearOverridesInSession,
   promises: {
     getAssignment,
     getAssignmentForUser,
+    getAssignmentForMongoUser,
+    featureFlagEnabled,
     featureFlagEnabledForUser,
+    featureFlagEnabledForMongoUser,
     getOneTimeAssignment,
     getActiveAssignmentsForUser,
+    getActiveAssignmentsForMongoUser,
     hasUserBeenAssignedToVariant,
     decrementLabsVariantCounter,
     incrementLabsVariantCounterIfBelowLimit,
+    userMaintenanceOnLogin,
   },
 }

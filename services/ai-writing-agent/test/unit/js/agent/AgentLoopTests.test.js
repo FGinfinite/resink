@@ -74,6 +74,11 @@ vi.mock('../../../../app/js/util/outline.js', () => ({
   extractFileReferences: (...args) => mockExtractFileReferences(...args),
 }))
 
+const mockGetAgentRuntimeConfig = vi.fn()
+vi.mock('../../../../app/js/RuntimeConfigManager.js', () => ({
+  getAgentRuntimeConfig: (...args) => mockGetAgentRuntimeConfig(...args),
+}))
+
 const { AgentLoop } = await import(
   '../../../../app/js/agent/AgentLoop.js'
 )
@@ -180,6 +185,9 @@ describe('AgentLoop', () => {
     mockBuildSystemPrompt.mockReset().mockResolvedValue('System prompt')
     mockExtractOutline.mockReset()
     mockExtractFileReferences.mockReset()
+    mockGetAgentRuntimeConfig.mockReset().mockReturnValue({
+      agentContext: { enabled: false },
+    })
     // Default: no promptSnapshot
     mockAgentFindOne.mockResolvedValue(null)
     mockAgentUpdateOne.mockResolvedValue({ modifiedCount: 1 })
@@ -241,6 +249,7 @@ describe('AgentLoop', () => {
       const doneEvents = events.filter(e => e.type === 'done')
       expect(doneEvents).toHaveLength(1)
       expect(doneEvents[0].content).toBe('Hello! How can I help you today?')
+      expect(doneEvents[0].finishReason).toBe('stop')
     })
 
     it('ends loop with done when finish_reason=length', async () => {
@@ -252,6 +261,7 @@ describe('AgentLoop', () => {
       const doneEvents = events.filter(e => e.type === 'done')
       expect(doneEvents).toHaveLength(1)
       expect(doneEvents[0].content).toBe('A very long response...')
+      expect(doneEvents[0].finishReason).toBe('length')
     })
 
     it('handles empty content with finish_reason=stop', async () => {
@@ -538,6 +548,48 @@ describe('AgentLoop', () => {
       expect(toolResults[0].result.output).toContain('Please use one of these')
     })
 
+    it('does not execute a tool denied by the scoped registry', async () => {
+      const toolCall = createMockToolCall('edit_document', {
+        path: 'main.tex',
+        oldText: 'before',
+        newText: 'after',
+      })
+      const deniedTool = createMockTool('edit_document')
+      deniedTool.execute = vi.fn()
+
+      mockLLM
+        .addToolCallResponse(null, [toolCall])
+        .addTextResponse('I cannot edit in this profile.', 'stop')
+
+      mockToolRegistry.get.mockImplementation(name => {
+        if (name === 'edit_document') return undefined
+        return undefined
+      })
+      mockToolRegistry.getNames.mockReturnValue(['read_document', 'list_files'])
+      mockToolRegistry.getTools.mockReturnValue([
+        {
+          type: 'function',
+          function: {
+            name: 'read_document',
+            description: 'Read document',
+            parameters: { type: 'object', properties: {} },
+          },
+        },
+      ])
+
+      const loop = createAgentLoop()
+      const events = await collectEvents(loop.run('Edit my doc'))
+
+      const toolResults = events.filter(e => e.type === 'tool_result')
+      expect(toolResults[0].result.success).toBe(false)
+      expect(toolResults[0].result.error).toBe('UNKNOWN_TOOL')
+      expect(toolResults[0].result.output).toContain('Unknown tool "edit_document"')
+      expect(toolResults[0].result.output).toContain('read_document')
+      expect(toolResults[0].result.output).not.toContain('edit_document. Please')
+      expect(deniedTool.execute).not.toHaveBeenCalled()
+      expect(mockLLM.chatCalls[0].tools.map(tool => tool.function.name)).toEqual(['read_document'])
+    })
+
     it('returns guidance message for invalid JSON arguments', async () => {
       const toolCall = {
         id: 'call_bad_json',
@@ -634,6 +686,305 @@ describe('AgentLoop', () => {
       expect(toolResults[0].toolName).toBe('read_document')
       expect(toolResults[0].result.success).toBe(true)
       expect(toolResults[0].result.output).toBe('Document content here')
+    })
+
+    it('auto-syncs persistent workspace changes when the model stops after editing', async () => {
+      const editCall = createMockToolCall(
+        'edit_document',
+        {
+          path: 'main.tex',
+          oldText: 'old',
+          newText: 'new',
+        },
+        'call_edit'
+      )
+
+      mockLLM
+        .addToolCallResponse(null, [editCall])
+        .addTextResponse('I made the edit.', 'stop')
+
+      const editTool = createMockTool('edit_document', async () => ({
+        success: true,
+        output: 'Workspace file edited',
+        data: { workspaceEdit: true },
+      }))
+      const syncTool = createMockTool('sync_workspace_changes', async () => ({
+        success: true,
+        output: 'Workspace changes synced: 1 change(s) queued for user review.',
+        data: {
+          workspace: true,
+          changeCount: 1,
+          pendingChangeIds: ['change-1'],
+          pendingChanges: [
+            {
+              id: 'change-1',
+              projectId: 'project-1',
+              docId: 'doc-1',
+              type: 'edit',
+              path: '/main.tex',
+              status: 'pending',
+              source: 'persistent-workspace',
+              oldText: 'old',
+              newText: 'new',
+            },
+          ],
+        },
+      }))
+      mockToolRegistry.get.mockImplementation(name => {
+        if (name === 'edit_document') return editTool
+        if (name === 'sync_workspace_changes') return syncTool
+        return undefined
+      })
+      mockToolRegistry.getNames.mockReturnValue([
+        'read_document',
+        'edit_document',
+        'sync_workspace_changes',
+      ])
+
+      const loop = createAgentLoop({
+        adapters: {
+          ...mockAdapters,
+          workspaceManager: { syncPendingChanges: vi.fn() },
+        },
+        userId: 'user-1',
+      })
+      const events = await collectEvents(
+        loop.run('Edit my doc', {
+          _persistentWorkspace: {
+            workspace: { _id: 'workspace-1' },
+            sandboxSession: { id: 'sandbox-1' },
+          },
+        })
+      )
+
+      const toolResults = events.filter(e => e.type === 'tool_result')
+      expect(toolResults.map(e => e.toolName)).toEqual([
+        'edit_document',
+        'sync_workspace_changes',
+      ])
+      expect(toolResults[1].result.data.pendingChangeIds).toEqual(['change-1'])
+      expect(toolResults[1].result.data.pendingChanges[0]).toMatchObject({
+        id: 'change-1',
+        docId: 'doc-1',
+        oldText: 'old',
+        newText: 'new',
+      })
+      const syncToolCall = events.find(
+        e =>
+          e.type === 'tool_call' &&
+          e.toolCall.function.name === 'sync_workspace_changes'
+      )
+      expect(syncToolCall).toBeTruthy()
+    })
+
+    it('yields live draft change events from tool results before the final tool_result', async () => {
+      const editCall = createMockToolCall(
+        'edit_document',
+        {
+          path: 'main.tex',
+          oldText: 'old',
+          newText: 'new',
+        },
+        'call_edit'
+      )
+
+      mockLLM
+        .addToolCallResponse(null, [editCall])
+        .addTextResponse('I made the edit.', 'stop')
+
+      const editTool = createMockTool('edit_document', async () => ({
+        success: true,
+        output: 'Workspace file edited',
+        data: {
+          workspaceEdit: true,
+          events: [
+            {
+              type: 'draft_change.created',
+              changeId: 'change-1',
+              changeSetId: 'change-set-1',
+              draftChange: { id: 'change-1', path: '/main.tex' },
+            },
+          ],
+        },
+      }))
+      const syncExecute = vi.fn(async () => ({
+        success: true,
+        output: 'Workspace clean.',
+        data: { workspace: true, changeCount: 0, pendingChanges: [] },
+      }))
+      const syncTool = createMockTool('sync_workspace_changes', syncExecute)
+      mockToolRegistry.get.mockImplementation(name => {
+        if (name === 'edit_document') return editTool
+        if (name === 'sync_workspace_changes') return syncTool
+        return undefined
+      })
+      mockToolRegistry.getNames.mockReturnValue([
+        'edit_document',
+        'sync_workspace_changes',
+      ])
+
+      const loop = createAgentLoop({
+        adapters: {
+          ...mockAdapters,
+          workspaceManager: { syncPendingChanges: vi.fn() },
+        },
+        userId: 'user-1',
+      })
+      const events = await collectEvents(
+        loop.run('Edit my doc', {
+          _persistentWorkspace: {
+            workspace: { _id: 'workspace-1' },
+            sandboxSession: { id: 'sandbox-1' },
+          },
+        })
+      )
+
+      const draftEventIndex = events.findIndex(e => e.type === 'draft_change.created')
+      const editResultIndex = events.findIndex(
+        e => e.type === 'tool_result' && e.toolName === 'edit_document'
+      )
+      expect(draftEventIndex).toBeGreaterThan(-1)
+      expect(editResultIndex).toBeGreaterThan(-1)
+      expect(draftEventIndex).toBeLessThan(editResultIndex)
+      expect(events[draftEventIndex]).toMatchObject({
+        changeId: 'change-1',
+        changeSetId: 'change-set-1',
+        draftChange: { path: '/main.tex' },
+      })
+      expect(syncExecute).toHaveBeenCalledWith(
+        { fail_on_drift: true },
+        expect.objectContaining({
+          sessionState: expect.objectContaining({
+            pendingDraftChanges: [
+              expect.objectContaining({ id: 'change-1', path: '/main.tex' }),
+            ],
+          }),
+        })
+      )
+    })
+
+    it('does not auto-sync workspace edits already applied through auto-accept', async () => {
+      const editCall = createMockToolCall(
+        'edit_document',
+        {
+          path: 'main.tex',
+          oldText: 'old',
+          newText: 'new',
+        },
+        'call_edit'
+      )
+
+      mockLLM
+        .addToolCallResponse(null, [editCall])
+        .addTextResponse('Applied the edit.', 'stop')
+
+      const editTool = createMockTool('edit_document', async () => ({
+        success: true,
+        output: 'Workspace file edited and applied',
+        data: {
+          workspaceEdit: true,
+          workspaceEditApplied: true,
+          events: [
+            { type: 'draft_change.created', changeId: 'change-1' },
+            { type: 'canonical_change.applied', changeId: 'change-1' },
+            { type: 'draft_change.accepted', changeId: 'change-1' },
+          ],
+        },
+      }))
+      const syncTool = createMockTool('sync_workspace_changes', vi.fn())
+      mockToolRegistry.get.mockImplementation(name => {
+        if (name === 'edit_document') return editTool
+        if (name === 'sync_workspace_changes') return syncTool
+        return undefined
+      })
+      mockToolRegistry.getNames.mockReturnValue([
+        'edit_document',
+        'sync_workspace_changes',
+      ])
+
+      const loop = createAgentLoop({
+        adapters: {
+          ...mockAdapters,
+          workspaceManager: { syncPendingChanges: vi.fn() },
+        },
+        userId: 'user-1',
+      })
+      const events = await collectEvents(
+        loop.run('Edit my doc', {
+          _persistentWorkspace: {
+            workspace: { _id: 'workspace-1' },
+            sandboxSession: { id: 'sandbox-1' },
+          },
+          autoAccept: true,
+        })
+      )
+
+      const toolResults = events.filter(e => e.type === 'tool_result')
+      expect(toolResults.map(e => e.toolName)).toEqual(['edit_document'])
+      expect(syncTool.execute).not.toHaveBeenCalled()
+      expect(events.map(e => e.type)).toContain('canonical_change.applied')
+      expect(events.map(e => e.type)).toContain('draft_change.accepted')
+    })
+
+    it('does not auto-sync workspace edits finalized as writeback conflicts', async () => {
+      const editCall = createMockToolCall(
+        'edit_document',
+        {
+          path: 'main.tex',
+          oldText: 'old',
+          newText: 'new',
+        },
+        'call_edit'
+      )
+
+      mockLLM
+        .addToolCallResponse(null, [editCall])
+        .addTextResponse('The edit has a conflict.', 'stop')
+
+      const editTool = createMockTool('edit_document', async () => ({
+        success: true,
+        output: 'Workspace file edited with conflict',
+        data: {
+          workspaceEdit: true,
+          workspaceEditFinalized: true,
+          events: [
+            { type: 'draft_change.created', changeId: 'change-1' },
+            { type: 'draft_change.conflict', changeId: 'change-1' },
+          ],
+        },
+      }))
+      const syncTool = createMockTool('sync_workspace_changes', vi.fn())
+      mockToolRegistry.get.mockImplementation(name => {
+        if (name === 'edit_document') return editTool
+        if (name === 'sync_workspace_changes') return syncTool
+        return undefined
+      })
+      mockToolRegistry.getNames.mockReturnValue([
+        'edit_document',
+        'sync_workspace_changes',
+      ])
+
+      const loop = createAgentLoop({
+        adapters: {
+          ...mockAdapters,
+          workspaceManager: { syncPendingChanges: vi.fn() },
+        },
+        userId: 'user-1',
+      })
+      const events = await collectEvents(
+        loop.run('Edit my doc', {
+          _persistentWorkspace: {
+            workspace: { _id: 'workspace-1' },
+            sandboxSession: { id: 'sandbox-1' },
+          },
+          autoAccept: true,
+        })
+      )
+
+      const toolResults = events.filter(e => e.type === 'tool_result')
+      expect(toolResults.map(e => e.toolName)).toEqual(['edit_document'])
+      expect(syncTool.execute).not.toHaveBeenCalled()
+      expect(events.map(e => e.type)).toContain('draft_change.conflict')
     })
 
     it('continues loop through multiple tool call turns', async () => {
@@ -775,6 +1126,31 @@ describe('AgentLoop', () => {
       const doneEvents = events.filter(e => e.type === 'done')
       expect(doneEvents[0].readDocuments).toBeInstanceOf(Map)
       expect(doneEvents[0].readDocuments.size).toBe(0)
+    })
+
+    it('passes _persistentWorkspace to tool context', async () => {
+      const persistentWorkspace = {
+        sandboxSession: { id: 'sandbox-1' },
+      }
+      const toolCall = createMockToolCall('read_document', { path: 'main.tex' })
+      let capturedContext
+      mockLLM
+        .addToolCallResponse(null, [toolCall])
+        .addTextResponse('Done.', 'stop')
+      mockToolRegistry.get.mockImplementation(name => {
+        if (name === 'read_document') {
+          return createMockTool('read_document', async (_args, ctx) => {
+            capturedContext = ctx
+            return { success: true, output: 'read' }
+          })
+        }
+        return undefined
+      })
+
+      const loop = createAgentLoop()
+      await collectEvents(loop.run('Read', { _persistentWorkspace: persistentWorkspace }))
+
+      expect(capturedContext.persistentWorkspace).toBe(persistentWorkspace)
     })
   })
 
@@ -1224,14 +1600,63 @@ describe('AgentLoop', () => {
         expect.objectContaining({}),
         expect.objectContaining({
           $set: {
-            promptSnapshot: {
+            promptSnapshot: expect.objectContaining({
               projectName: 'My Paper',
               rootDocPath: '/main.tex',
               documentOutline: '# Intro\n# Methods',
               fileReferences: null,
-              projectRules: null,
-            },
+              agentContextBlock: null,
+            }),
           },
+        })
+      )
+    })
+
+    it('uses structured Agent Context when enabled', async () => {
+      mockLLM.addTextResponse('Hello!', 'stop')
+      mockGetAgentRuntimeConfig.mockReturnValue({
+        agentContext: { enabled: true },
+      })
+      const agentContextBuilder = {
+        build: vi.fn().mockResolvedValue({
+          block: '<agent_context>\n<context>\n</agent_context>',
+          sourceRefs: [],
+          snapshot: { _id: 'snapshot-1' },
+        }),
+      }
+      const adapters = createAdapters({
+        resolveDocIdToPath: vi.fn().mockResolvedValue('/main.tex'),
+        getDocumentContent: vi.fn().mockResolvedValue({ content: '\\section{Intro}' }),
+      })
+      mockExtractOutline.mockReturnValue('# Intro')
+      mockAgentFindOne.mockResolvedValue(null)
+
+      const loop = createAgentLoop({
+        adapters,
+        userId: 'user-1',
+        agentContextBuilder,
+      })
+      await collectEvents(loop.run('Hi', { rootDocId: 'root-doc-123' }))
+
+      expect(agentContextBuilder.build).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: 'session-1',
+          projectId: 'proj-1',
+          userId: 'user-1',
+          turnId: expect.stringMatching(/^turn-/),
+          rootDocId: 'root-doc-123',
+        })
+      )
+      const enrichedCtx = mockContextManager.buildMessages.mock.calls[0][2]
+      expect(enrichedCtx.agentContextBlock).toContain('<agent_context>')
+      expect(mockAgentUpdateOne).toHaveBeenCalledWith(
+        expect.objectContaining({}),
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            promptSnapshot: expect.objectContaining({
+              agentContextBlock: '<agent_context>\n<context>\n</agent_context>',
+            }),
+          }),
         })
       )
     })

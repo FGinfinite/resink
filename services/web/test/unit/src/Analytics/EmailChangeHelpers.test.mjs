@@ -40,8 +40,8 @@ describe('EmailChangeHelper', function () {
           {
             email: 'test2@example.com',
             reversedHostname: 'moc.elpmaxe',
-            createdAt: new Date('2023-01-01T00:00:00'),
-            confirmedAt: new Date('2023-02-01T00:00:00'),
+            createdAt: new Date('2023-01-01T00:00:00.000Z'),
+            confirmedAt: new Date('2023-02-01T00:00:00.000Z'),
             default: false,
           },
         ])
@@ -49,7 +49,7 @@ describe('EmailChangeHelper', function () {
 
       it('calls registerEmailChange with the passed event data', async function () {
         const eventData = {
-          emailCreatedAt: new Date('2024-01-01T00:00:00'),
+          emailCreatedAt: new Date('2024-01-01T00:00:00.000Z'),
           isPrimary: true,
         }
         await EmailChangeHelpers.registerEmailUpdate(userId, email, eventData)
@@ -71,8 +71,8 @@ describe('EmailChangeHelper', function () {
           {
             email,
             reversedHostname: 'moc.elpmaxe',
-            createdAt: new Date('2023-01-01T00:00:00'),
-            confirmedAt: new Date('2023-02-01T00:00:00'),
+            createdAt: new Date('2023-01-01T00:00:00.000Z'),
+            confirmedAt: new Date('2023-02-01T00:00:00.000Z'),
             default: false,
           },
         ])
@@ -95,8 +95,8 @@ describe('EmailChangeHelper', function () {
 
       it('prefers supplied event data over fetched email data', async function () {
         const eventData = {
-          emailCreatedAt: new Date('2024-01-01T00:00:00'),
-          emailConfirmedAt: new Date('2024-02-01T00:00:00'),
+          emailCreatedAt: new Date('2024-01-01T00:00:00.000Z'),
+          emailConfirmedAt: new Date('2024-02-01T00:00:00.000Z'),
           isPrimary: true,
         }
         await EmailChangeHelpers.registerEmailUpdate(userId, email, eventData)
@@ -135,8 +135,8 @@ describe('EmailChangeHelper', function () {
           {
             email: 'test2@example.com',
             reversedHostname: 'moc.elpmaxe',
-            createdAt: new Date('2023-01-01T00:00:00'),
-            confirmedAt: new Date('2023-02-01T00:00:00'),
+            createdAt: new Date('2023-01-01T00:00:00.000Z'),
+            confirmedAt: new Date('2023-02-01T00:00:00.000Z'),
             default: false,
           },
         ])
@@ -144,7 +144,7 @@ describe('EmailChangeHelper', function () {
 
       it('calls registerEmailChange with the passed event data', async function () {
         const eventData = {
-          emailCreatedAt: new Date('2024-01-01T00:00:00'),
+          emailCreatedAt: new Date('2024-01-01T00:00:00.000Z'),
           isPrimary: true,
         }
         await EmailChangeHelpers.registerEmailCreation(userId, email, eventData)
@@ -167,8 +167,8 @@ describe('EmailChangeHelper', function () {
           {
             email,
             reversedHostname: 'moc.elpmaxe',
-            createdAt: new Date('2023-01-01T00:00:00'),
-            confirmedAt: new Date('2023-02-01T00:00:00'),
+            createdAt: new Date('2023-01-01T00:00:00.000Z'),
+            confirmedAt: new Date('2023-02-01T00:00:00.000Z'),
             default: false,
           },
         ])
@@ -191,8 +191,8 @@ describe('EmailChangeHelper', function () {
 
       it('prefers supplied event data over fetched email data', async function () {
         const eventData = {
-          emailCreatedAt: new Date('2024-01-01T00:00:00'),
-          emailConfirmedAt: new Date('2024-02-01T00:00:00'),
+          emailCreatedAt: new Date('2024-01-01T00:00:00.000Z'),
+          emailConfirmedAt: new Date('2024-02-01T00:00:00.000Z'),
           isPrimary: true,
         }
         await EmailChangeHelpers.registerEmailCreation(userId, email, eventData)
@@ -230,8 +230,8 @@ describe('EmailChangeHelper', function () {
           {
             email: 'test2@example.com',
             reversedHostname: 'moc.elpmaxe',
-            createdAt: new Date('2023-01-01T00:00:00'),
-            confirmedAt: new Date('2023-02-01T00:00:00'),
+            createdAt: new Date('2023-01-01T00:00:00.000Z'),
+            confirmedAt: new Date('2023-02-01T00:00:00.000Z'),
             default: false,
           },
         ])
@@ -239,8 +239,8 @@ describe('EmailChangeHelper', function () {
 
       it('calls registerEmailChange with the passed event data', async function () {
         const eventData = {
-          emailCreatedAt: new Date('2024-01-01T00:00:00'),
-          emailDeletedAt: new Date('2025-02-01T00:00:00'),
+          emailCreatedAt: new Date('2024-01-01T00:00:00.000Z'),
+          emailDeletedAt: new Date('2025-02-01T00:00:00.000Z'),
           isPrimary: true,
         }
         await EmailChangeHelpers.registerEmailDeletion(userId, email, eventData)

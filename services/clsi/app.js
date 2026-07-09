@@ -22,6 +22,8 @@ import os from 'node:os'
 import OError from '@overleaf/o-error'
 import ConversionController from './app/js/ConversionController.js'
 import FileUploadMiddleware from './app/js/FileUploadMiddleware.js'
+import { initializeRuntimeConfig } from './app/js/RuntimeConfigManager.js'
+import { fileURLToPath } from 'node:url'
 logger.initialize('clsi')
 logger.logger.serializers.clsiRequest = LoggerSerializers.clsiRequest
 
@@ -39,10 +41,9 @@ app.use(Metrics.http.monitor(logger))
 // Compile requests can take longer than the default two
 // minutes (including file download time), so bump up the
 // timeout a bit.
-const TIMEOUT = 630 * 1000 // 10.5 minutes - 30 seconds download allowance
 app.use(function (req, res, next) {
-  req.setTimeout(TIMEOUT)
-  res.setTimeout(TIMEOUT)
+  req.setTimeout(Settings.requestTimeoutMs)
+  res.setTimeout(Settings.requestTimeoutMs)
   res.removeHeader('X-Powered-By')
   next()
 })
@@ -125,15 +126,30 @@ app.get(
 )
 
 // Conversion endpoints
+// Keep old route for backwards compatibility during CLSI/web deploy transition
 app.post(
   '/convert/docx-to-latex',
   FileUploadMiddleware.multerMiddleware,
-  ConversionController.convertDocxToLaTeX
+  (req, res, next) => {
+    req.query.type = 'docx'
+    next()
+  },
+  ConversionController.convertDocumentToLaTeX
+)
+app.post(
+  '/convert/document-to-latex',
+  FileUploadMiddleware.multerMiddleware,
+  ConversionController.convertDocumentToLaTeX
 )
 app.post(
   '/project/:project_id/user/:user_id/download/project-to-document',
   bodyParser.json({ limit: Settings.compileSizeLimit }),
   ConversionController.convertProjectToDocument
+)
+app.post(
+  '/convert/pdf-to-jpeg',
+  FileUploadMiddleware.multerMiddleware,
+  ConversionController.convertPDFToJPEG
 )
 
 if (process.env.NODE_ENV === 'development' && global.__coverage__) {
@@ -186,9 +202,6 @@ function runSmokeTest() {
     setTimeout(runSmokeTest, INTERVAL)
   })
 }
-if (Settings.smokeTest) {
-  runSmokeTest()
-}
 
 app.get('/health_check', function (req, res) {
   if (Settings.processTooOld) {
@@ -200,7 +213,10 @@ app.get('/health_check', function (req, res) {
   smokeTest.sendLastResult(res)
 })
 
-app.get('/smoke_test_force', (req, res) => smokeTest.sendNewResult(res))
+app.get(
+  '/smoke_test_force',
+  async (req, res, next) => await smokeTest.sendNewResult(res).catch(next)
+)
 
 app.use(function (error, req, res, next) {
   if (error instanceof Errors.NotFoundError) {
@@ -299,7 +315,7 @@ const host = Settings.internal.clsi.host
 const loadTcpPort = Settings.internal.load_balancer_agent.load_port
 const loadHttpPort = Settings.internal.load_balancer_agent.local_port
 
-if (import.meta.main) {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // Called directly
 
   // handle uncaught exceptions when running in production
@@ -310,27 +326,37 @@ if (import.meta.main) {
     )
   }
 
-  app.listen(port, host, error => {
-    if (error) {
-      logger.fatal({ error }, `Error starting CLSI on ${host}:${port}`)
-    } else {
-      logger.debug(`CLSI starting up, listening on ${host}:${port}`)
-    }
-  })
+  initializeRuntimeConfig()
+    .then(() => {
+      app.listen(port, host, error => {
+        if (error) {
+          logger.fatal({ error }, `Error starting CLSI on ${host}:${port}`)
+        } else {
+          logger.debug(`CLSI starting up, listening on ${host}:${port}`)
+          if (Settings.smokeTest) {
+            runSmokeTest()
+          }
+        }
+      })
 
-  loadTcpServer.listen(loadTcpPort, host, function (error) {
-    if (error != null) {
-      throw error
-    }
-    logger.debug(`Load tcp agent listening on load port ${loadTcpPort}`)
-  })
+      loadTcpServer.listen(loadTcpPort, host, function (error) {
+        if (error != null) {
+          throw error
+        }
+        logger.debug(`Load tcp agent listening on load port ${loadTcpPort}`)
+      })
 
-  loadHttpServer.listen(loadHttpPort, host, function (error) {
-    if (error != null) {
-      throw error
-    }
-    logger.debug(`Load http agent listening on load port ${loadHttpPort}`)
-  })
+      loadHttpServer.listen(loadHttpPort, host, function (error) {
+        if (error != null) {
+          throw error
+        }
+        logger.debug(`Load http agent listening on load port ${loadHttpPort}`)
+      })
+    })
+    .catch(error => {
+      logger.fatal({ error }, 'Error initializing CLSI runtime config')
+      process.exit(1)
+    })
 }
 
 export default app

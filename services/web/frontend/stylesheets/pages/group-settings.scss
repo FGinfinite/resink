@@ -31,7 +31,8 @@
   }
 }
 
-.managed-users-enabled {
+.managed-users-enabled,
+.domain-capture-enabled {
   color: var(--content-positive);
 
   .icon {
@@ -346,7 +347,15 @@ h4.group-settings-title {
     font-size: var(--font-size-02);
 
     td {
-      padding-top: 0;
+      padding: 0;
+    }
+
+    .notification-list {
+      margin-top: var(--spacing-07);
+    }
+
+    .collapse {
+      margin-bottom: var(--spacing-06);
     }
   }
 
@@ -355,7 +364,7 @@ h4.group-settings-title {
   }
 
   .domain-verification-status-table-cell {
-    text-wrap: nowrap;
+    white-space: nowrap;
   }
 
   .domain-verification-failure-reason {
@@ -364,6 +373,10 @@ h4.group-settings-title {
 
   .domain-verification-token-container {
     margin-bottom: var(--spacing-03);
+  }
+
+  td .material-symbols {
+    vertical-align: middle;
   }
 }
 
@@ -374,4 +387,8 @@ h4.group-settings-title {
   border: 1px solid var(--border-disabled);
   display: flex;
   justify-content: space-between;
+}
+
+.remove-domain-confirm-name {
+  color: var(--content-danger);
 }

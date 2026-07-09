@@ -32,6 +32,12 @@ vi.mock('@overleaf/o-error', () => {
 const { EditDocumentTool } = await import(
   '../../../../app/js/tool/edit.js'
 )
+const { ReadDocumentTool } = await import(
+  '../../../../app/js/tool/read.js'
+)
+const { workspaceContentVersion } = await import(
+  '../../../../app/js/tool/read.js'
+)
 const { EditMatchError } = await import(
   '../../../../app/js/adapter/DocumentAdapter.js'
 )
@@ -130,6 +136,30 @@ describe('EditDocumentTool', () => {
       expect(result.output).toContain('change-123')
       expect(result.data.needsConfirmation).toBe(true)
       expect(result.data.change).toEqual(pendingChange)
+    })
+
+    it('rejects canonical edits outside child write policy', async () => {
+      mockContext.sessionState.readDocuments.set('proj-1:doc-1', {
+        version: 5,
+        readAt: Date.now(),
+      })
+
+      const result = await tool.execute(
+        {
+          oldText: 'old text',
+          newText: 'new text',
+        },
+        {
+          ...mockContext,
+          currentDocPath: '/notes/private.md',
+          writeGlobs: ['**/*.tex'],
+        }
+      )
+
+      expect(result.success).toBe(false)
+      expect(result.output).toContain('Policy denied write')
+      expect(mockDocumentAdapter.getDocumentContent).not.toHaveBeenCalled()
+      expect(mockDocumentAdapter.previewEdit).not.toHaveBeenCalled()
     })
 
     it('rejects identical oldText/newText', async () => {
@@ -281,5 +311,207 @@ describe('EditDocumentTool', () => {
       expect(result.data.change).toEqual(pendingChange)
       expect(result.data.changeId).toBe('change-789')
     })
+
+    describe('persistent workspace', () => {
+      it('enforces read-before-write for workspace files', async () => {
+        const sandboxSession = {
+          readFile: vi.fn(),
+          writeFile: vi.fn(),
+        }
+
+        const result = await tool.execute(
+          {
+            path: 'main.tex',
+            oldText: 'old',
+            newText: 'new',
+          },
+          {
+            ...mockContext,
+            persistentWorkspace: { sandboxSession },
+          }
+        )
+
+        expect(result.success).toBe(false)
+        expect(result.output).toContain('must read the document first')
+        expect(sandboxSession.readFile).not.toHaveBeenCalled()
+        expect(sandboxSession.writeFile).not.toHaveBeenCalled()
+      })
+
+      it('edits sandbox workspace file without creating canonical pendingChange', async () => {
+        mockContext.sessionState.readDocuments.set('workspace:main.tex', {
+          version: workspaceContentVersion('hello old world'),
+          path: 'main.tex',
+          workspace: true,
+        })
+        const sandboxSession = {
+          readFile: vi.fn().mockResolvedValue('hello old world'),
+          writeFile: vi.fn().mockResolvedValue(undefined),
+        }
+
+        const result = await tool.execute(
+          {
+            path: 'main.tex',
+            oldText: 'old',
+            newText: 'new',
+          },
+          {
+            ...mockContext,
+            persistentWorkspace: { sandboxSession },
+          }
+        )
+
+        expect(result.success).toBe(true)
+        expect(sandboxSession.readFile).toHaveBeenCalledWith('main.tex')
+        expect(sandboxSession.writeFile).toHaveBeenCalledWith('main.tex', 'hello new world')
+        expect(mockDocumentAdapter.previewEdit).not.toHaveBeenCalled()
+        expect(result.data).toMatchObject({
+          workspaceEdit: true,
+          path: '/main.tex',
+          oldText: 'old',
+          newText: 'new',
+        })
+        expect(result.data.changeId).toBeNull()
+        expect(result.data.changeSetId).toBeNull()
+        expect(result.data.draftChange).toBeNull()
+        expect(result.data.events).toEqual([])
+        expect(result.data.needsConfirmation).toBeUndefined()
+      })
+
+      it('rejects workspace edits outside child write policy', async () => {
+        mockContext.sessionState.readDocuments.set('workspace:private.md', {
+          version: workspaceContentVersion('hello old world'),
+          path: 'private.md',
+          workspace: true,
+        })
+        const sandboxSession = {
+          readFile: vi.fn().mockResolvedValue('hello old world'),
+          writeFile: vi.fn().mockResolvedValue(undefined),
+        }
+
+        const result = await tool.execute(
+          {
+            path: 'private.md',
+            oldText: 'old',
+            newText: 'new',
+          },
+          {
+            ...mockContext,
+            persistentWorkspace: { sandboxSession },
+            writeGlobs: ['**/*.tex'],
+          }
+        )
+
+        expect(result.success).toBe(false)
+        expect(result.output).toContain('Policy denied write')
+        expect(sandboxSession.readFile).not.toHaveBeenCalled()
+        expect(sandboxSession.writeFile).not.toHaveBeenCalled()
+      })
+
+      it('creates a live draft change for workspace edits when bridge is available', async () => {
+        mockContext.sessionState.readDocuments.set('workspace:main.tex', {
+          version: workspaceContentVersion('hello old world'),
+          baseVersion: 12,
+          docId: 'doc-1',
+          path: 'main.tex',
+          workspace: true,
+        })
+        const sandboxSession = {
+          readFile: vi.fn().mockResolvedValue('hello old world'),
+          writeFile: vi.fn().mockResolvedValue(undefined),
+        }
+        const liveDraftChangeBridge = {
+          createDraftChange: vi.fn().mockResolvedValue({
+            changeSet: { _id: { toString: () => 'change-set-1' } },
+            draftChange: { _id: { toString: () => 'change-1' } },
+            event: {
+              type: 'draft_change.created',
+              changeSetId: 'change-set-1',
+              changeId: 'change-1',
+              draftChange: {
+                id: 'change-1',
+                path: '/main.tex',
+                oldText: 'old',
+                newText: 'new',
+                status: 'pending',
+              },
+            },
+          }),
+        }
+
+        const result = await tool.execute(
+          {
+            path: 'main.tex',
+            oldText: 'old',
+            newText: 'new',
+          },
+          {
+            ...mockContext,
+            adapters: {
+              ...mockContext.adapters,
+              liveDraftChangeBridge,
+            },
+            persistentWorkspace: { sandboxSession },
+          }
+        )
+
+        expect(result.success).toBe(true)
+        expect(liveDraftChangeBridge.createDraftChange).toHaveBeenCalledWith(
+          expect.objectContaining({
+            docPath: '/main.tex',
+            workspacePath: 'main.tex',
+            matchedText: 'old',
+            newText: 'new',
+            baseVersion: 12,
+            docId: 'doc-1',
+          })
+        )
+        expect(result.data).toMatchObject({
+          workspaceEdit: true,
+          changeId: 'change-1',
+          changeSetId: 'change-set-1',
+          draftChange: {
+            id: 'change-1',
+            path: '/main.tex',
+            status: 'pending',
+          },
+          events: [
+            {
+              type: 'draft_change.created',
+              changeSetId: 'change-set-1',
+              changeId: 'change-1',
+            },
+          ],
+        })
+      })
+    })
+  })
+})
+
+describe('ReadDocumentTool policy guard', () => {
+  it('rejects canonical reads outside child file policy', async () => {
+    const tool = new ReadDocumentTool()
+    const projectAdapter = {
+      resolvePathToDocId: vi.fn().mockResolvedValue('doc-private'),
+    }
+    const documentAdapter = {
+      getDocumentContent: vi.fn(),
+    }
+
+    const result = await tool.execute(
+      { path: 'private.md' },
+      {
+        projectId: 'proj-1',
+        adapters: {
+          project: projectAdapter,
+          document: documentAdapter,
+        },
+        sessionState: { readDocuments: new Map() },
+        fileGlobs: ['**/*.tex'],
+      }
+    )
+
+    expect(result.success).toBe(false)
+    expect(result.output).toContain('Policy denied read')
+    expect(documentAdapter.getDocumentContent).not.toHaveBeenCalled()
   })
 })

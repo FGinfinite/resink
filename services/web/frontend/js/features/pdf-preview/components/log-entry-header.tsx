@@ -42,7 +42,6 @@ function LogEntryHeader({
   logEntry,
   actionButtonsOverride,
   openCollapseIconOverride,
-  extraActions,
 }: {
   headerTitle: string | React.ReactNode
   level: ErrorLevel
@@ -56,7 +55,6 @@ function LogEntryHeader({
   logEntry?: LogEntryData
   actionButtonsOverride?: React.ReactNode
   openCollapseIconOverride?: string
-  extraActions?: React.ReactNode
 }) {
   const { t } = useTranslation()
   const logLocationSpanRef = useRef<HTMLSpanElement>(null)
@@ -183,7 +181,6 @@ function LogEntryHeader({
           {actionComponents.map(({ import: { default: Component }, path }) => (
             <Component key={path} logEntry={logEntry} id={id} />
           ))}
-          {extraActions}
         </div>
       )}
     </header>

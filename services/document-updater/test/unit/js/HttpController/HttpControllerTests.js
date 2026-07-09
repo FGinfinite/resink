@@ -432,6 +432,66 @@ describe('HttpController', function () {
       })
     })
 
+    describe('with expected_version', function () {
+      beforeEach(async function () {
+        this.req.body.expected_version = 42
+        this.DocumentManager.promises.setDocWithLock.resolves({ rev: '123' })
+        await this.HttpController.setDoc(this.req, this.res, this.next)
+      })
+
+      it('should pass expected_version to setDocWithLock', function () {
+        this.DocumentManager.promises.setDocWithLock.should.have.been.calledWith(
+          this.project_id,
+          this.doc_id,
+          this.lines,
+          this.source,
+          this.user_id,
+          this.undoing,
+          true,
+          42
+        )
+      })
+    })
+
+    describe('with an invalid expected_version', function () {
+      beforeEach(async function () {
+        this.req.body.expected_version = '42'
+        await this.HttpController.setDoc(this.req, this.res, this.next)
+      })
+
+      it('should return a 400 response', function () {
+        this.res.status.calledWith(400).should.equal(true)
+        this.res.json
+          .calledWith({ error: 'invalid expected_version' })
+          .should.equal(true)
+      })
+
+      it('should not call setDocWithLock', function () {
+        this.DocumentManager.promises.setDocWithLock.should.not.have.been.called
+      })
+    })
+
+    describe('when the document version does not match', function () {
+      beforeEach(async function () {
+        this.DocumentManager.promises.setDocWithLock.rejects(
+          new Errors.VersionMismatchError(41, 42)
+        )
+        await this.HttpController.setDoc(this.req, this.res, this.next)
+      })
+
+      it('should return a 409 response', function () {
+        this.res.status.calledWith(409).should.equal(true)
+        this.res.json
+          .calledWith({
+            error: 'version_mismatch',
+            message: 'document version mismatch',
+            expected: 41,
+            actual: 42,
+          })
+          .should.equal(true)
+      })
+    })
+
     describe('when an errors occurs', function () {
       beforeEach(async function () {
         this.DocumentManager.promises.setDocWithLock.rejects(new Error('oops'))

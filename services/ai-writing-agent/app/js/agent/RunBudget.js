@@ -12,6 +12,7 @@ export class RunBudget {
     // Counters
     this.depth = 0
     this.delegations = 0
+    this.currentDelegations = 0
     this.llmCalls = 0
     this.toolCalls = 0
     this.totalTokens = 0
@@ -31,6 +32,10 @@ export class RunBudget {
     const defaults = getDefaults()
     this.maxDepth = safeInt(limits.maxDepth, safeInt(defaults.maxDepth, 1))
     this.maxDelegations = safeInt(limits.maxDelegations, safeInt(defaults.maxDelegations, 6))
+    this.maxConcurrentDelegations = safeInt(
+      limits.maxConcurrentDelegations,
+      safeInt(defaults.maxConcurrentDelegations, 1)
+    )
     this.maxLLMCalls = safeInt(limits.maxLLMCalls, safeInt(defaults.maxLLMCalls, 30))
     this.maxToolCalls = safeInt(limits.maxToolCalls, safeInt(defaults.maxToolCalls, 70))
     this.maxTotalTokens = safeInt(limits.maxTotalTokens, safeInt(defaults.maxTotalTokens, 200_000))
@@ -56,6 +61,22 @@ export class RunBudget {
     if (!this.canDelegate(currentDepth)) return false
     this.recordDelegation()
     return true
+  }
+
+  canRunConcurrentDelegation() {
+    return this.currentDelegations < this.maxConcurrentDelegations
+  }
+
+  tryAcquireDelegationSlot() {
+    if (!this.canRunConcurrentDelegation()) return false
+    this.currentDelegations++
+    return true
+  }
+
+  releaseDelegationSlot() {
+    if (this.currentDelegations > 0) {
+      this.currentDelegations--
+    }
   }
 
   canCallLLM() {

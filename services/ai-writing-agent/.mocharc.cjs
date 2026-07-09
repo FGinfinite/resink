@@ -3,6 +3,5 @@ module.exports = {
   timeout: 30000,
   exit: true,
   reporter: 'spec',
-  require: [],
   spec: 'test/acceptance/js/**/*.js',
 }

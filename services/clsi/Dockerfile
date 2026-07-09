@@ -4,9 +4,13 @@
 
 FROM node:24.14.1 AS base
 
-WORKDIR /overleaf/services/clsi
+# Corepack setup, shared between all the images.
 ENV PATH="/overleaf/node_modules/.bin:$PATH"
-RUN corepack enable
+ENV COREPACK_HOME=/opt/corepack
+RUN corepack enable && corepack install -g yarn@4.14.1
+ENV COREPACK_ENABLE_NETWORK=0
+
+WORKDIR /overleaf/services/clsi
 COPY services/clsi/install_deps.sh /overleaf/services/clsi/
 RUN chmod 0755 ./install_deps.sh && ./install_deps.sh
 ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]
@@ -19,6 +23,7 @@ RUN mkdir /home/node/.config && chown node:node /home/node/.config
 FROM base AS app
 
 COPY package.json yarn.lock .yarnrc.yml /overleaf/
+COPY libraries/eslint-plugin/package.json /overleaf/libraries/eslint-plugin/package.json
 COPY libraries/fetch-utils/package.json /overleaf/libraries/fetch-utils/package.json
 COPY libraries/logger/package.json /overleaf/libraries/logger/package.json
 COPY libraries/metrics/package.json /overleaf/libraries/metrics/package.json
@@ -27,10 +32,12 @@ COPY libraries/overleaf-editor-core/package.json /overleaf/libraries/overleaf-ed
 COPY libraries/promise-utils/package.json /overleaf/libraries/promise-utils/package.json
 COPY libraries/settings/package.json /overleaf/libraries/settings/package.json
 COPY libraries/stream-utils/package.json /overleaf/libraries/stream-utils/package.json
+COPY libraries/validation-tools/package.json /overleaf/libraries/validation-tools/package.json
 COPY services/clsi/package.json /overleaf/services/clsi/package.json
 COPY .yarn/patches/ /overleaf/.yarn/patches/
 
 RUN cd /overleaf && yarn workspaces focus @overleaf/clsi overleaf
+COPY libraries/eslint-plugin/ /overleaf/libraries/eslint-plugin/
 COPY libraries/fetch-utils/ /overleaf/libraries/fetch-utils/
 COPY libraries/logger/ /overleaf/libraries/logger/
 COPY libraries/metrics/ /overleaf/libraries/metrics/
@@ -39,6 +46,7 @@ COPY libraries/overleaf-editor-core/ /overleaf/libraries/overleaf-editor-core/
 COPY libraries/promise-utils/ /overleaf/libraries/promise-utils/
 COPY libraries/settings/ /overleaf/libraries/settings/
 COPY libraries/stream-utils/ /overleaf/libraries/stream-utils/
+COPY libraries/validation-tools/ /overleaf/libraries/validation-tools/
 COPY services/clsi/ /overleaf/services/clsi/
 
 FROM app AS with-texlive

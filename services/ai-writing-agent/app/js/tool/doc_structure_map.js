@@ -261,9 +261,10 @@ function countWords(content) {
   text = text.replace(/[{}[\]$]/g, ' ')
   // Remove comment lines (unescaped % only; \% is a literal percent sign)
   // Replace escaped backslashes temporarily to handle \\% correctly
-  text = text.replace(/\\\\/g, '\x00\x00')
-  text = text.replace(/(^|[^\x00\\])%.*/gm, '$1')
-  text = text.replace(/\x00\x00/g, '\\\\')
+  const escapedBackslashMarker = '__OVERLEAF_ESCAPED_BACKSLASH__'
+  text = text.replace(/\\\\/g, escapedBackslashMarker)
+  text = text.replace(/(^|[^\\])%.*/gm, '$1')
+  text = text.replaceAll(escapedBackslashMarker, '\\\\')
   // Split by whitespace and count non-empty tokens
   const words = text.split(/\s+/).filter(w => w.length > 0)
   return words.length

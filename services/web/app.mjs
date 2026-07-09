@@ -137,6 +137,6 @@ SiteAdminHandler.initialise()
 // Auto-create admin account from env vars (one-time, idempotent)
 import('./modules/server-ce-scripts/scripts/auto-create-admin.mjs')
   .then(mod => mod.default())
-  .catch(err => console.warn('auto-create-admin failed:', err.message))
+  .catch(err => logger.warn({ err }, 'auto-create-admin failed'))
 
 export default Server.server

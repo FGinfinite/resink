@@ -7,7 +7,6 @@ export type RefProviderSettings = {
   enabled: boolean
   disablePersonalLibrary: boolean
   groups: { id: string }[]
-  migrated?: boolean
 }
 
 export type UserSettings = {
@@ -16,6 +15,7 @@ export type UserSettings = {
   autoPairDelimiters: boolean
   syntaxValidation: boolean
   previewTabs: boolean
+  editorTabs: boolean
   editorTheme: string
   editorLightTheme: string
   editorDarkTheme: string
@@ -29,6 +29,7 @@ export type UserSettings = {
   breadcrumbs: boolean
   nonBlinkingCursor: boolean
   darkModePdf: boolean
+  floatingMenu: boolean
   zotero: RefProviderSettings
   mendeley: RefProviderSettings
   papers: RefProviderSettings

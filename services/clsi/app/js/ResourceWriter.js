@@ -23,8 +23,14 @@ import Metrics from '@overleaf/metrics'
 import logger from '@overleaf/logger'
 import settings from '@overleaf/settings'
 import ClsiMetrics from './Metrics.js'
+import { Minimatch } from 'minimatch'
 
 const { shouldSkipMetrics } = ClsiMetrics
+
+// Additional file patterns to keep between compiles
+const preciousFileMatcher = new Minimatch(settings.preciousFilePattern, {
+  dot: true,
+})
 
 let ResourceWriter
 
@@ -267,6 +273,10 @@ export default ResourceWriter = {
       // Epstopdf generated files
       shouldDelete = false
     }
+    // Keep additional precious files and directories
+    if (shouldDelete && preciousFileMatcher.match(path)) {
+      shouldDelete = false
+    }
     if (
       path === 'output.tar.gz' ||
       path === 'output.synctex.gz' ||
@@ -276,7 +286,9 @@ export default ResourceWriter = {
       path === 'output.log' ||
       path === 'output.xdv' ||
       path === 'output.stdout' ||
-      path === 'output.stderr'
+      path === 'output.stderr' ||
+      path === 'output.fdb_latexmk' ||
+      path === 'output.fls'
     ) {
       shouldDelete = true
     }

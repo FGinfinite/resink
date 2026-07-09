@@ -24,10 +24,10 @@ import { registerLexicalTextEntity } from '@lexical/text'
 import MaterialIcon from '@/shared/components/material-icon'
 import { MentionNode } from './chat-input/mention-node'
 import { CommandTextNode, $createCommandNode, $isCommandNode } from './chat-input/command-node'
-import { SKILL_NAME_SET, getSkillHint, getSkillByName } from './chat-input/skill-registry'
+import { SKILL_NAME_SET, getSkillHint } from './chat-input/skill-registry'
 import MentionsPlugin from './chat-input/mentions-plugin'
 import SlashCommandPlugin from './chat-input/slash-command-plugin'
-import SubmitOnEnterPlugin, { extractContent } from './chat-input/submit-plugin'
+import SubmitOnEnterPlugin from './chat-input/submit-plugin'
 import QuoteSelectionButton from './chat-input/quote-selection-button'
 import ModelSelector from './chat-input/model-selector'
 import type { Reference } from './chat-input/types'
@@ -286,8 +286,9 @@ function ChatInput({ onSendMessage, onStopConversation, isStreaming, projectId, 
 
   // Cleanup local preview URLs on unmount
   useEffect(() => {
+    const previewUrls = previewUrlsRef.current
     return () => {
-      previewUrlsRef.current.forEach(url => URL.revokeObjectURL(url))
+      previewUrls.forEach(url => URL.revokeObjectURL(url))
     }
   }, [])
 

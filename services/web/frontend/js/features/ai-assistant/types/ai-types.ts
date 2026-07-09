@@ -148,11 +148,83 @@ export interface AISession {
   title: string
   messages: AIMessage[]
   changeHistory: PendingChange[]
+  activeHandoff?: {
+    teamId: string
+    taskId?: string
+    childSessionId?: string
+    capabilityName?: string
+    objective?: string
+    startedAt?: number | string
+  } | null
   error?: Error | null
   hasMore?: boolean
   nextBeforeSeq?: number | null
   createdAt: number
   updatedAt: number
+}
+
+export interface AgentTeamTask {
+  id: string
+  teamId: string
+  parentTaskId?: string | null
+  childSessionId?: string | null
+  agentName: string
+  mode?: string
+  status: string
+  objective: string
+  error?: string | null
+  findingCount?: number
+  artifactCount?: number
+  draftChangeCount?: number
+  retryable?: boolean
+  cancellable?: boolean
+}
+
+export interface AgentTeamSummary {
+  id: string
+  projectId: string
+  rootSessionId: string
+  rootChangeSetId?: string | null
+  workflowType: string
+  status: string
+  mode?: string
+  startedBy?: string
+  policySummary?: Record<string, unknown>
+  budgetSummary?: Record<string, unknown>
+  archiveReason?: string | null
+  startedAt?: number | null
+  updatedAt?: number | null
+  completedAt?: number | null
+}
+
+export interface AgentTeamEvent {
+  id: string
+  teamId: string
+  taskId?: string | null
+  sessionId?: string | null
+  type: string
+  payload?: Record<string, unknown>
+  createdAt?: number | null
+}
+
+export interface AgentTeamRun {
+  team: AgentTeamSummary
+  tasks: AgentTeamTask[]
+  results?: Array<{
+    id: string
+    taskId: string
+    status: string
+    summary?: string
+    findings?: unknown[]
+    artifacts?: unknown[]
+  }>
+  events?: AgentTeamEvent[]
+  diagnostics?: {
+    taskCount?: number
+    resultCount?: number
+    contextPackCount?: number
+    eventTypes?: Record<string, number>
+  }
 }
 
 export interface SessionSummary {
@@ -373,6 +445,19 @@ export interface CompactSessionResponse {
   message?: string
 }
 
+export interface GetTeamRunResponse {
+  teamRun: AgentTeamRun
+}
+
+export interface ListTeamRunsResponse {
+  teamRuns: AgentTeamSummary[]
+}
+
+export interface RetryTeamRunTaskResponse {
+  teamRun: AgentTeamRun
+  task?: AgentTeamTask
+}
+
 // ============================================================================
 // Streaming Phase
 // ============================================================================
@@ -410,6 +495,7 @@ export interface AIAssistantState {
   selectedModelSlot: string | null
   availableModelSlots: ModelSlotInfo[]
   modelSlotsLoaded: boolean
+  teamRuns: AgentTeamRun[]
 }
 
 // ============================================================================
@@ -450,6 +536,8 @@ export type AIAssistantAction =
   | { type: 'STOP_CONVERSATION' }
   | { type: 'SET_MODEL_SLOT'; slug: string | null }
   | { type: 'SET_AVAILABLE_MODEL_SLOTS'; slots: ModelSlotInfo[] }
+  | { type: 'SET_TEAM_RUNS'; teamRuns: AgentTeamRun[] }
+  | { type: 'UPSERT_TEAM_RUN'; teamRun: AgentTeamRun }
 
 // ============================================================================
 // Attachment Types

@@ -13,7 +13,6 @@ const { ConversionError, InvalidParametersError } = Errors
 
 const FileHandler = {
   insertFile: callbackify(insertFile),
-  deleteFile: callbackify(deleteFile),
   getFile: callbackify(getFile),
   getRedirectUrl: callbackify(getRedirectUrl),
   getFileSize: callbackify(getFileSize),
@@ -21,7 +20,6 @@ const FileHandler = {
     getFile,
     getRedirectUrl,
     insertFile,
-    deleteFile,
     getFileSize,
   },
 }
@@ -46,10 +44,6 @@ async function insertFile(bucket, key, stream) {
     })
   }
   await PersistorManager.sendStream(bucket, key, stream)
-}
-
-async function deleteFile(bucket, key) {
-  await PersistorManager.deleteObject(bucket, key)
 }
 
 async function getFile(bucket, key, opts) {

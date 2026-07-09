@@ -293,6 +293,9 @@ async function tryDeleteUser(req, res, next) {
   UserSessionsManager.promises.untrackSession(user, sessionId).catch(err => {
     logger.warn({ err, userId: user._id }, 'failed to untrack session')
   })
+  // Note that the "*" must be in double quotes
+  // https://www.w3.org/TR/clear-site-data/#ref-for-grammardef-
+  res.set('Clear-Site-Data', '"*"')
   res.sendStatus(200)
 }
 
@@ -335,7 +338,6 @@ const refProviderSettingsSchema = z
     enabled: z.boolean().optional(),
     groups: z.array(z.object({ id: z.string() })).optional(),
     disablePersonalLibrary: z.boolean().optional(),
-    migrated: z.boolean().optional(),
   })
   .optional()
 
@@ -422,6 +424,9 @@ async function updateUserSettings(req, res, next) {
   if (body.breadcrumbs != null) {
     user.ace.breadcrumbs = Boolean(body.breadcrumbs)
   }
+  if (body.editorTabs != null) {
+    user.ace.editorTabs = Boolean(body.editorTabs)
+  }
   if (body.nonBlinkingCursor != null) {
     user.ace.nonBlinkingCursor = Boolean(body.nonBlinkingCursor)
   }
@@ -431,6 +436,9 @@ async function updateUserSettings(req, res, next) {
   }
   if (body.darkModePdf != null) {
     user.ace.darkModePdf = Boolean(body.darkModePdf)
+  }
+  if (body.floatingMenu != null) {
+    user.ace.floatingMenu = Boolean(body.floatingMenu)
   }
   if (body.zotero != null) {
     user.ace.zotero = { ...user.ace.zotero, ...body.zotero }

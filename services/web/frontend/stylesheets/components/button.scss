@@ -52,15 +52,15 @@
 
   // secondary
   --btn-secondary-color: var(--white);
-  --btn-secondary-background: var(--bg-dark-elevated);
+  --btn-secondary-background: var(--bg-dark-primary);
   --btn-secondary-border: var(--bg-light-primary);
   --btn-secondary-hover-background: var(--bg-dark-tertiary);
   --btn-secondary-hover-border: var(--bg-light-primary);
 
   // ghost
   --btn-ghost-color: var(--white);
-  --btn-ghost-background: var(--bg-dark-tertiary);
-  --btn-ghost-hover-background: var(--bg-dark-elevated);
+  --btn-ghost-background: var(--bg-dark-secondary);
+  --btn-ghost-hover-background: var(--bg-dark-tertiary);
 
   // danger
   --btn-danger-color: var(--white);
@@ -110,13 +110,7 @@
   &:focus-visible {
     background-color: var(--bs-btn-bg);
   }
-}
 
-.ide-redesign-main .btn:focus-visible {
-  --bs-btn-focus-box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.4);
-}
-
-.btn {
   // Sizes
 
   // Default size

@@ -359,7 +359,7 @@ POST /api/ai/autocomplete
 
 ### 与上游的差异
 
-主要改动包括：
+详见 `OVERLEAF-PATCHES.md`，主要改动：
 
 - AI Assistant 集成（前端 + 后端）
 - 管理员面板模块

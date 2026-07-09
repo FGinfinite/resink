@@ -93,17 +93,17 @@ describe('LLMAdapter', () => {
   })
 
   describe('constructor', () => {
-    it('sets defaults from settings', () => {
+    it('sets safe empty defaults without implicit settings credentials', () => {
       const adapter = new LLMAdapter()
 
-      expect(adapter.apiBase).toBe('https://test.api.com/v1')
-      expect(adapter.apiKey).toBe('test-key-from-settings')
-      expect(adapter.model).toBe('gpt-4o-test')
-      expect(adapter.maxTokens).toBe(2048)
-      expect(adapter.temperature).toBe(0.5)
-      expect(adapter.timeout).toBe(30000)
-      expect(adapter.retryAttempts).toBe(2)
-      expect(adapter.retryDelay).toBe(100)
+      expect(adapter.apiBase).toBe('')
+      expect(adapter.apiKey).toBe('')
+      expect(adapter.model).toBe('')
+      expect(adapter.maxTokens).toBe(0)
+      expect(adapter.temperature).toBeNull()
+      expect(adapter.timeout).toBe(60000)
+      expect(adapter.retryAttempts).toBe(3)
+      expect(adapter.retryDelay).toBe(1000)
     })
 
     it('accepts custom options that override settings', () => {
@@ -499,8 +499,8 @@ describe('LLMAdapter', () => {
         })
         expect.fail('Should have thrown')
       } catch (error) {
-        // The rate limit error is thrown and re-wrapped
-        expect(error.message).toContain('LLM request failed')
+        expect(error.constructor.name).toBe('LLMRateLimitError')
+        expect(error.message).toBe('Rate limit exceeded')
       }
     })
 

@@ -1,4 +1,4 @@
-import React, { FC, useEffect, useRef } from 'react'
+import React, { FC, useEffect, useRef, useState } from 'react'
 import { EditorProviders } from '../../../helpers/editor-providers'
 import { TabsContainer } from '../../../../../frontend/js/features/source-editor/components/tabs/tabs-container'
 import {
@@ -10,7 +10,16 @@ import {
   EditorManagerContext,
 } from '@/features/ide-react/context/editor-manager-context'
 import { TAB_TRANSFER_TYPE } from '@/features/ide-react/context/tabs-context'
-import { useFileTreeOpenContext } from '@/features/ide-react/context/file-tree-open-context'
+import {
+  EditorViewContext,
+  useEditorViewContext,
+} from '@/features/ide-react/context/editor-view-context'
+import { EditorView } from '@codemirror/view'
+import { EditorState, Transaction } from '@codemirror/state'
+import { tabsListener } from '@/features/source-editor/extensions/tabs-listener'
+import ReviewPanelTabsHeaderPortal from '@/features/review-panel/components/review-panel-tabs-header-portal'
+import { FileTree } from '@/features/ide-react/components/file-tree'
+import { PROJECT_ID } from '../../../helpers/editor-providers'
 
 const DOC_IDS = {
   main: 'doc-main-id',
@@ -120,49 +129,68 @@ function makeEditorManagerProvider() {
   return EditorManagerProvider
 }
 
-// Rendered inside the provider tree to call handleFileTreeSelect() when a
-// custom DOM event fires. Also triggers handleFileTreeInit() on mount.
-function FileSelectionDriver({
-  autoSelectEntity,
-}: {
-  autoSelectEntity?: FileTreeDocumentFindResult | FileTreeFileRefFindResult
-} = {}) {
-  const { handleFileTreeSelect, handleFileTreeInit } = useFileTreeOpenContext()
-  const initDone = useRef(false)
-
-  useEffect(() => {
-    if (!initDone.current) {
-      initDone.current = true
-      handleFileTreeInit()
-      if (autoSelectEntity) {
-        handleFileTreeSelect([autoSelectEntity])
-      }
-    }
-  }, [handleFileTreeInit, handleFileTreeSelect, autoSelectEntity])
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const { detail } = e as CustomEvent
-      handleFileTreeSelect([detail])
-    }
-    document.addEventListener('test:selectEntity', handler)
-    return () => {
-      document.removeEventListener('test:selectEntity', handler)
-    }
-  }, [handleFileTreeSelect])
-
-  return null
+function makeEditorViewProvider() {
+  const EditorViewProvider: FC<React.PropsWithChildren> = ({ children }) => {
+    const parentRef = useRef<HTMLDivElement>(null)
+    const [view, setView] = useState<EditorView | null>(null)
+    useEffect(() => {
+      if (!parentRef.current) return
+      const editorView = new EditorView({
+        state: EditorState.create({
+          extensions: [
+            tabsListener(true),
+            EditorView.contentAttributes.of({
+              'data-testid': 'mock-editor-view',
+            }),
+          ],
+        }),
+        parent: parentRef.current,
+      })
+      setView(editorView)
+      return () => editorView.destroy()
+    }, [])
+    return (
+      <EditorViewContext.Provider value={{ view, setView: () => {} }}>
+        {children}
+        <div ref={parentRef} />
+      </EditorViewContext.Provider>
+    )
+  }
+  return EditorViewProvider
 }
 
-// Dispatch a custom event to select an entity (simulates file-tree click).
-// Must be wrapped in cy.then() so it runs in the Cypress command queue.
+function RemoteChangeButton() {
+  const { view } = useEditorViewContext()
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        view?.dispatch({
+          changes: { from: 0, insert: 'remote text' },
+          annotations: Transaction.remote.of(true),
+        })
+      }
+    >
+      Add a remote change
+    </button>
+  )
+}
+
+function expandFolders(path: string[] = []) {
+  // path[0] is the root folder, so skip that one
+  path.slice(1).forEach(folderId => {
+    cy.get(`[data-file-id="${folderId}"] .file-tree-entity-button`).click()
+  })
+}
+
+// Target rows by entity id rather than accessible name so that entities sharing
+// a name stay unambiguous.
 function selectEntity(
   entity: FileTreeDocumentFindResult | FileTreeFileRefFindResult
 ) {
-  document.dispatchEvent(
-    new CustomEvent('test:selectEntity', { detail: entity })
-  )
-  cy.findByRole('tab', { name: new RegExp(entity.entity.name) }).should('exist')
+  expandFolders(entity.path)
+  cy.get(`[data-file-id="${entity.entity._id}"]`).click()
+  cy.get(`[data-tab-id="${entity.entity._id}"]`).should('exist')
 }
 
 function selectDoc(id: string, path?: string[]) {
@@ -188,10 +216,13 @@ describe('File Tabs', function () {
         userSettings={options?.userSettings}
         providers={{
           EditorManagerProvider: makeEditorManagerProvider(),
+          EditorViewProvider: makeEditorViewProvider(),
         }}
       >
-        <FileSelectionDriver />
         <TabsContainer />
+        <FileTree />
+        <ReviewPanelTabsHeaderPortal />
+        <RemoteChangeButton />
       </EditorProviders>
     )
   }
@@ -206,39 +237,36 @@ describe('File Tabs', function () {
     // Clear persisted tab state from localStorage
     cy.window().then(win => {
       Object.keys(win.localStorage).forEach(key => {
-        if (key.startsWith('open-tabs:')) {
+        if (key.startsWith('open-tabs:') || key.startsWith('folder.')) {
           win.localStorage.removeItem(key)
         }
       })
+
+      // Pointing doc.open_id at a non-existent entity stops the file tree
+      // auto-selecting
+      win.localStorage.setItem(
+        `doc.open_id.${PROJECT_ID}`,
+        JSON.stringify('no-open-doc')
+      )
     })
     cy.window().then(win => {
       win.metaAttributesCache.set('ol-user', { id: 'user1' })
     })
 
     mountTabs()
+
+    cy.findByTestId('mock-editor-view').as('editorView')
   })
 
   describe('Initial file selection', function () {
     it('automatically creates a tab for the initially opened file', function () {
-      // Re-mount with auto-selection of the root doc to simulate
-      // the file tree opening the initial document on startup
-      cy.mount(
-        <EditorProviders
-          rootFolder={defaultRootFolder as any}
-          rootDocId={DOC_IDS.main}
-          providers={{
-            EditorManagerProvider: makeEditorManagerProvider(),
-          }}
-        >
-          <FileSelectionDriver
-            autoSelectEntity={makeDocEntity(
-              DOC_IDS.intro,
-              DOC_NAMES[DOC_IDS.intro]
-            )}
-          />
-          <TabsContainer />
-        </EditorProviders>
-      )
+      cy.window().then(win => {
+        win.localStorage.setItem(
+          `doc.open_id.${PROJECT_ID}`,
+          JSON.stringify(DOC_IDS.intro)
+        )
+      })
+      mountTabs()
 
       cy.findByRole('tab', { name: /intro\.tex/ }).should('exist')
     })
@@ -266,7 +294,7 @@ describe('File Tabs', function () {
       cy.findByRole('tab', { name: /main\.tex/ }).should('exist')
 
       // Make main permanent (keypress) so selecting another file doesn't replace it
-      cy.get('body').type('a')
+      cy.get('@editorView').type('a')
 
       // Select another file
       cy.then(() => selectDoc(DOC_IDS.intro))
@@ -307,7 +335,7 @@ describe('File Tabs', function () {
         'tab-temporary'
       )
 
-      cy.get('body').type('a')
+      cy.get('@editorView').type('a')
 
       cy.findByRole('tab', { name: /main\.tex/ }).should(
         'not.have.class',
@@ -321,7 +349,7 @@ describe('File Tabs', function () {
       cy.findByRole('tab', { name: /main\.tex/ }).should('exist')
 
       // Make main permanent
-      cy.get('body').type('a')
+      cy.get('@editorView').type('a')
 
       // Open intro (temporary)
       cy.then(() => selectDoc(DOC_IDS.intro))
@@ -338,6 +366,21 @@ describe('File Tabs', function () {
       cy.findByRole('tab', { name: /main\.tex/ }).should('exist')
     })
 
+    it('does not make a temporary tab permanent on remote changes', function () {
+      cy.then(() => selectDoc(DOC_IDS.main))
+      cy.findByRole('tab', { name: /main\.tex/ }).should(
+        'have.class',
+        'tab-temporary'
+      )
+
+      cy.findByRole('button', { name: 'Add a remote change' }).click()
+
+      cy.findByRole('tab', { name: /main\.tex/ }).should(
+        'have.class',
+        'tab-temporary'
+      )
+    })
+
     it('makes a temporary tab permanent on double-click', function () {
       cy.then(() => selectDoc(DOC_IDS.main))
       cy.findByRole('tab', { name: /main\.tex/ }).should(
@@ -346,6 +389,21 @@ describe('File Tabs', function () {
       )
 
       cy.findByRole('tab', { name: /main\.tex/ }).dblclick()
+
+      cy.findByRole('tab', { name: /main\.tex/ }).should(
+        'not.have.class',
+        'tab-temporary'
+      )
+    })
+
+    it('makes a temporary tab permanent on double-clicking its file tree entry', function () {
+      cy.then(() => selectDoc(DOC_IDS.main))
+      cy.findByRole('tab', { name: /main\.tex/ }).should(
+        'have.class',
+        'tab-temporary'
+      )
+
+      cy.findByRole('treeitem', { name: 'main.tex' }).dblclick()
 
       cy.findByRole('tab', { name: /main\.tex/ }).should(
         'not.have.class',
@@ -376,7 +434,7 @@ describe('File Tabs', function () {
 
       // Close intro
       cy.findByRole('tab', { name: /intro\.tex/ }).within(() => {
-        cy.findByRole('button', { name: 'Close tab' }).click()
+        cy.findByRole('button', { name: 'Close' }).click()
       })
 
       cy.findByRole('tab', { name: /intro\.tex/ }).should('not.exist')
@@ -387,14 +445,9 @@ describe('File Tabs', function () {
       cy.then(() => selectDoc(DOC_IDS.main))
       cy.findAllByRole('tab').should('have.length', 1)
 
-      // Attempt to close the only tab
       cy.findByRole('tab', { name: /main\.tex/ }).within(() => {
-        cy.findByRole('button', { name: 'Close tab' }).click()
+        cy.findByRole('button', { name: 'Close' }).should('be.disabled')
       })
-
-      // Tab must still exist
-      cy.findByRole('tab', { name: /main\.tex/ }).should('exist')
-      cy.findAllByRole('tab').should('have.length', 1)
     })
 
     it('switches to an adjacent tab when closing the currently active tab', function () {
@@ -407,7 +460,7 @@ describe('File Tabs', function () {
 
       // Close the currently selected tab (appendix — the last one selected)
       cy.findByRole('tab', { name: /appendix\.tex/ }).within(() => {
-        cy.findByRole('button', { name: 'Close tab' }).click()
+        cy.findByRole('button', { name: 'Close' }).click()
       })
 
       cy.findByRole('tab', { name: /appendix\.tex/ }).should('not.exist')
@@ -440,23 +493,27 @@ describe('File Tabs', function () {
       cy.findByRole('tab', { name: /intro\.tex/ }).rightclick()
 
       cy.findByRole('menu').should('exist')
-      cy.findByRole('menuitem', { name: 'Close tab' }).should('exist')
-      cy.findByRole('menuitem', { name: 'Close others' }).should('exist')
+      cy.findByRole('menuitem', { name: 'Close' }).should('exist')
+      cy.findByRole('menuitem', { name: 'Close other tabs' }).should('exist')
+      cy.findByRole('menuitem', { name: 'Close tabs to the right' }).should(
+        'exist'
+      )
+      cy.findByRole('menuitem', { name: 'Tab settings…' }).should('exist')
     })
 
-    it('closes the clicked tab via "Close tab"', function () {
+    it('closes the clicked tab via "Close"', function () {
       cy.then(() => selectDoc(DOC_IDS.main))
       cy.then(() => selectDoc(DOC_IDS.intro))
 
       cy.findByRole('tab', { name: /intro\.tex/ }).rightclick()
-      cy.findByRole('menuitem', { name: 'Close tab' }).click()
+      cy.findByRole('menuitem', { name: 'Close' }).click()
 
       cy.findByRole('tab', { name: /intro\.tex/ }).should('not.exist')
       cy.findByRole('tab', { name: /main\.tex/ }).should('exist')
       cy.findByRole('menu').should('not.exist')
     })
 
-    it('closes all other tabs via "Close others"', function () {
+    it('closes all other tabs via "Close other tabs"', function () {
       cy.then(() => selectDoc(DOC_IDS.main))
       cy.then(() => selectDoc(DOC_IDS.intro))
       cy.then(() => selectDoc(DOC_IDS.appendix))
@@ -464,7 +521,7 @@ describe('File Tabs', function () {
       cy.findAllByRole('tab').should('have.length', 3)
 
       cy.findByRole('tab', { name: /intro\.tex/ }).rightclick()
-      cy.findByRole('menuitem', { name: 'Close others' }).click()
+      cy.findByRole('menuitem', { name: 'Close other tabs' }).click()
 
       cy.findAllByRole('tab').should('have.length', 1)
       cy.findByRole('tab', { name: /intro\.tex/ }).should('exist')
@@ -477,26 +534,132 @@ describe('File Tabs', function () {
 
       // appendix is the currently active tab; close others from intro
       cy.findByRole('tab', { name: /intro\.tex/ }).rightclick()
-      cy.findByRole('menuitem', { name: 'Close others' }).click()
+      cy.findByRole('menuitem', { name: 'Close other tabs' }).click()
 
       cy.get('@openDocWithId').should('have.been.calledWith', DOC_IDS.intro)
     })
 
-    it('disables both items when only one tab is open', function () {
+    it('closes tabs to the right of the target via "Close tabs to the right"', function () {
+      cy.then(() => selectDoc(DOC_IDS.main))
+      cy.then(() => selectDoc(DOC_IDS.intro))
+      cy.then(() => selectDoc(DOC_IDS.appendix))
+
+      cy.findAllByRole('tab').should('have.length', 3)
+
+      cy.findByRole('tab', { name: /intro\.tex/ }).rightclick()
+      cy.findByRole('menuitem', { name: 'Close tabs to the right' }).click()
+
+      cy.findAllByRole('tab').should('have.length', 2)
+      cy.findByRole('tab', { name: /main\.tex/ }).should('exist')
+      cy.findByRole('tab', { name: /intro\.tex/ }).should('exist')
+      cy.findByRole('tab', { name: /appendix\.tex/ }).should('not.exist')
+    })
+
+    it('navigates to the target tab when the active tab is closed to the right', function () {
+      cy.then(() => selectDoc(DOC_IDS.main))
+      cy.then(() => selectDoc(DOC_IDS.intro))
+      cy.then(() => selectDoc(DOC_IDS.appendix))
+
+      // appendix is the active tab; closing to the right of intro removes it
+      cy.findByRole('tab', { name: /intro\.tex/ }).rightclick()
+      cy.findByRole('menuitem', { name: 'Close tabs to the right' }).click()
+
+      cy.get('@openDocWithId').should('have.been.calledWith', DOC_IDS.intro)
+    })
+
+    it('keeps the active tab selected when it is to the left of the target', function () {
+      cy.then(() => selectDoc(DOC_IDS.main))
+      cy.then(() => selectDoc(DOC_IDS.intro))
+      cy.then(() => selectDoc(DOC_IDS.appendix))
+
+      // Re-select main so it becomes the active tab again (still at index 0)
+      cy.then(() => selectDoc(DOC_IDS.main))
+
+      // Closing to the right of intro removes appendix but not the active tab
+      cy.findByRole('tab', { name: /intro\.tex/ }).rightclick()
+      cy.findByRole('menuitem', { name: 'Close tabs to the right' }).click()
+
+      cy.findAllByRole('tab').should('have.length', 2)
+      cy.findByRole('tab', { name: /appendix\.tex/ }).should('not.exist')
+      cy.findByRole('tab', { name: /main\.tex/ }).should(
+        'have.attr',
+        'aria-selected',
+        'true'
+      )
+    })
+
+    it('disables the close actions when only one tab is open', function () {
       cy.then(() => selectDoc(DOC_IDS.main))
 
       cy.findByRole('tab', { name: /main\.tex/ }).rightclick()
 
-      cy.findByRole('menuitem', { name: 'Close tab' }).should(
+      cy.findByRole('menuitem', { name: 'Close' }).should(
         'have.attr',
         'aria-disabled',
         'true'
       )
-      cy.findByRole('menuitem', { name: 'Close others' }).should(
+      cy.findByRole('menuitem', { name: 'Close other tabs' }).should(
         'have.attr',
         'aria-disabled',
         'true'
       )
+      cy.findByRole('menuitem', { name: 'Close tabs to the right' }).should(
+        'have.attr',
+        'aria-disabled',
+        'true'
+      )
+    })
+
+    it('disables "Close tabs to the right" when the target is the last tab', function () {
+      cy.then(() => selectDoc(DOC_IDS.main))
+      cy.then(() => selectDoc(DOC_IDS.intro))
+      cy.then(() => selectDoc(DOC_IDS.appendix))
+
+      // appendix is the rightmost tab, so there is nothing to close to its right
+      cy.findByRole('tab', { name: /appendix\.tex/ }).rightclick()
+
+      cy.findByRole('menuitem', { name: 'Close tabs to the right' }).should(
+        'have.attr',
+        'aria-disabled',
+        'true'
+      )
+      // The other actions remain enabled with more than one tab open
+      cy.findByRole('menuitem', { name: 'Close' }).should(
+        'not.have.attr',
+        'aria-disabled',
+        'true'
+      )
+      cy.findByRole('menuitem', { name: 'Close other tabs' }).should(
+        'not.have.attr',
+        'aria-disabled',
+        'true'
+      )
+    })
+
+    it('opens tab settings via "Tab settings…"', function () {
+      cy.then(() => selectDoc(DOC_IDS.main))
+      cy.then(() => selectDoc(DOC_IDS.intro))
+
+      cy.window().then(win => {
+        cy.spy(win, 'dispatchEvent').as('dispatchEvent')
+      })
+
+      cy.findByRole('tab', { name: /intro\.tex/ }).rightclick()
+      cy.findByRole('menuitem', { name: 'Tab settings…' }).click()
+
+      // opens the settings modal...
+      cy.get('@dispatchEvent').should(
+        'have.been.calledWithMatch',
+        Cypress.sinon.match({ type: 'ui.toggle-settings', detail: true })
+      )
+      // ...and focuses the editorTabs setting
+      cy.get('@dispatchEvent').should(
+        'have.been.calledWithMatch',
+        Cypress.sinon.match({ type: 'ui.focus-setting', detail: 'editorTabs' })
+      )
+
+      // and the context menu closes
+      cy.findByRole('menu').should('not.exist')
     })
 
     it('closes the menu on Escape', function () {
@@ -557,7 +720,7 @@ describe('File Tabs', function () {
       cy.findByRole('tab', { name: /appendix\.tex/ }).rightclick({
         force: true,
       })
-      cy.findByRole('menuitem', { name: 'Close others' }).click()
+      cy.findByRole('menuitem', { name: 'Close other tabs' }).click()
 
       cy.findAllByRole('tab').should('have.length', 1)
       cy.findByRole('tab', { name: /appendix\.tex/ }).should('exist')
@@ -902,7 +1065,7 @@ describe('File Tabs', function () {
       for (let i = 1; i <= 10; i++) {
         const id = `ch${i}`
         cy.then(() => selectEntity(makeDocEntity(id, `chapter-${i}.tex`)))
-        cy.get('body').type('a')
+        cy.get('@editorView').type('a')
         cy.findByRole('tab', { name: new RegExp(`chapter-${i}.tex`) }).should(
           'be.visible'
         )
@@ -944,6 +1107,65 @@ describe('File Tabs', function () {
       cy.findByRole('tablist').should($el => {
         expect($el[0].scrollLeft).to.be.greaterThan(0)
       })
+    })
+  })
+
+  describe('Pruning deleted files', function () {
+    it('prunes persisted tabs whose files are no longer in the tree', function () {
+      cy.then(() => selectDoc(DOC_IDS.main))
+      cy.then(() => selectDoc(DOC_IDS.intro))
+      cy.then(() => selectDoc(DOC_IDS.appendix))
+
+      cy.findAllByRole('tab').should('have.length', 3)
+
+      // Re-mount with a tree containing only appendix.tex, then verify
+      // the last remaining tab cannot be closed
+      const trimmedRootFolder = makeRootFolder([
+        { _id: DOC_IDS.appendix, name: 'appendix.tex' },
+      ])
+      mountTabs({ rootFolder: trimmedRootFolder })
+
+      cy.findAllByRole('tab').should('have.length', 1)
+      cy.findByRole('tab', { name: /appendix\.tex/ }).should('exist')
+
+      cy.findByRole('tab', { name: /appendix\.tex/ }).within(() => {
+        cy.findByRole('button', { name: 'Close' }).should('be.disabled')
+      })
+    })
+  })
+
+  describe('Review panel header', function () {
+    function toggleReviewPanel() {
+      cy.window().then(win => {
+        win.dispatchEvent(new win.CustomEvent('ui.toggle-review-panel'))
+      })
+    }
+
+    it('does not render the review panel header when the review panel is closed', function () {
+      cy.then(() => selectDoc(DOC_IDS.main))
+
+      cy.findByRole('heading', { name: 'Review' }).should('not.exist')
+    })
+
+    it('renders the review panel header inside the tabs container when the review panel is open', function () {
+      cy.then(() => selectDoc(DOC_IDS.main))
+
+      toggleReviewPanel()
+
+      cy.get('.editor-tabs-container').within(() => {
+        cy.findByRole('heading', { name: 'Review' }).should('exist')
+      })
+    })
+
+    it('removes the review panel header when the review panel is closed again', function () {
+      cy.then(() => selectDoc(DOC_IDS.main))
+
+      toggleReviewPanel()
+      cy.findByRole('heading', { name: 'Review' }).should('exist')
+
+      toggleReviewPanel()
+
+      cy.findByRole('heading', { name: 'Review' }).should('not.exist')
     })
   })
 

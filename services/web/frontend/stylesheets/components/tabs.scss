@@ -38,9 +38,6 @@
           padding: var(--spacing-04);
           line-height: var(--line-height-03);
           text-decoration: none;
-          transition: background-color var(--transition-fast) var(--ease-standard),
-                      color var(--transition-fast) var(--ease-standard),
-                      border-color var(--transition-fast) var(--ease-standard);
 
           &:focus,
           &:hover {

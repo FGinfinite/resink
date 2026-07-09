@@ -25,6 +25,9 @@ describe('CompileController', () => {
           clsi: {
             url: 'http://clsi.example.com',
             outputUrlPrefix: '/zone/b',
+            instanceType: 'c4d',
+            zone: 'b',
+            isSpotInstance: true,
             downloadHost: 'http://localhost:3013',
           },
           clsiCache: {
@@ -82,12 +85,12 @@ describe('CompileController', () => {
           path: 'output.pdf',
           type: 'pdf',
           size: 1337,
-          build: 1234,
+          build: '1234-5678',
         },
         {
           path: 'output.log',
           type: 'log',
-          build: 1234,
+          build: '1234-5678',
         },
       ]
       ctx.RequestParser.parse = sinon.stub().callsArgWith(1, null, ctx.request)
@@ -149,6 +152,9 @@ describe('CompileController', () => {
               })),
               clsiCacheShard: undefined,
               baseHistoryVersion: undefined,
+              instanceType: 'c4d',
+              zone: 'b',
+              isSpotInstance: true,
             },
           })
           .should.equal(true)
@@ -178,6 +184,9 @@ describe('CompileController', () => {
               })),
               clsiCacheShard: undefined,
               baseHistoryVersion: undefined,
+              instanceType: 'c4d',
+              zone: 'b',
+              isSpotInstance: true,
             },
           })
           .should.equal(true)
@@ -190,12 +199,12 @@ describe('CompileController', () => {
           {
             path: 'fake_output.pdf',
             type: 'pdf',
-            build: 1234,
+            build: '1234-5678',
           },
           {
             path: 'output.log',
             type: 'log',
-            build: 1234,
+            build: '1234-5678',
           },
         ]
         ctx.CompileManager.doCompileWithLock = sinon
@@ -227,6 +236,9 @@ describe('CompileController', () => {
             })),
             clsiCacheShard: undefined,
             baseHistoryVersion: undefined,
+            instanceType: 'c4d',
+            zone: 'b',
+            isSpotInstance: true,
           },
         })
       })
@@ -239,12 +251,12 @@ describe('CompileController', () => {
             path: 'output.pdf',
             type: 'pdf',
             size: 0,
-            build: 1234,
+            build: '1234-5678',
           },
           {
             path: 'output.log',
             type: 'log',
-            build: 1234,
+            build: '1234-5678',
           },
         ]
         ctx.CompileManager.doCompileWithLock = sinon
@@ -276,6 +288,9 @@ describe('CompileController', () => {
             })),
             clsiCacheShard: undefined,
             baseHistoryVersion: undefined,
+            instanceType: 'c4d',
+            zone: 'b',
+            isSpotInstance: true,
           },
         })
       })
@@ -309,6 +324,9 @@ describe('CompileController', () => {
               timings: ctx.timings,
               clsiCacheShard: undefined,
               baseHistoryVersion: undefined,
+              instanceType: 'c4d',
+              zone: 'b',
+              isSpotInstance: true,
             },
           })
           .should.equal(true)
@@ -345,6 +363,9 @@ describe('CompileController', () => {
               buildId: undefined,
               clsiCacheShard: undefined,
               baseHistoryVersion: undefined,
+              instanceType: 'c4d',
+              zone: 'b',
+              isSpotInstance: true,
             },
           })
           .should.equal(true)
@@ -380,6 +401,9 @@ describe('CompileController', () => {
               buildId: undefined,
               clsiCacheShard: undefined,
               baseHistoryVersion: undefined,
+              instanceType: 'c4d',
+              zone: 'b',
+              isSpotInstance: true,
             },
           })
           .should.equal(true)
@@ -413,6 +437,9 @@ describe('CompileController', () => {
               buildId: undefined,
               clsiCacheShard: undefined,
               baseHistoryVersion: undefined,
+              instanceType: 'c4d',
+              zone: 'b',
+              isSpotInstance: true,
             },
           })
           .should.equal(true)

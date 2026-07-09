@@ -65,7 +65,6 @@
     );
 
     text-decoration: none;
-    transition: background-color var(--transition-fast) var(--ease-standard);
 
     &.ide-redesign-toolbar-button-icon {
       @include ol-button-variant(
@@ -98,7 +97,6 @@
     text-align: center;
     border-radius: 100%;
     color: var(--redesign-toolbar-home-link-color);
-    transition: background-color var(--transition-fast) var(--ease-standard);
 
     .toolbar-ol-home-button {
       display: none;
@@ -191,9 +189,8 @@
 
 .ide-redesign-toolbar-actions {
   display: flex;
-  gap: var(--spacing-02);
+  gap: var(--spacing-04);
   padding-left: var(--spacing-05);
-  align-items: center;
 }
 
 .ide-redesign-toolbar-button-container {
@@ -239,92 +236,4 @@
 
 .ide-redesign-beta-button.btn.btn-secondary {
   @include editor-switcher-button;
-}
-
-// ── Toolbar separator ──
-.ide-redesign-toolbar-separator {
-  width: 1px;
-  height: 16px;
-  background: var(--redesign-toolbar-border-divider);
-  align-self: center;
-  flex-shrink: 0;
-}
-
-// ── AI status indicator ──
-.toolbar-ai-status {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: none;
-  background: transparent;
-  border-radius: var(--border-radius-full);
-  cursor: pointer;
-  color: var(--redesign-subdued-button-color);
-  transition: color var(--transition-fast) var(--ease-standard),
-    background-color var(--transition-fast) var(--ease-standard);
-  align-self: center;
-
-  &:hover {
-    background-color: var(--redesign-subdued-button-hover-background);
-  }
-
-  &:focus-visible {
-    outline: 2px solid var(--ai-accent, #10b981);
-    outline-offset: 1px;
-  }
-
-  .toolbar-ai-status-icon {
-    font-size: 18px;
-    opacity: 0.45;
-  }
-}
-
-.toolbar-ai-status-working .toolbar-ai-status-icon {
-  opacity: 1;
-  color: var(--ai-accent, #10b981);
-  animation: toolbar-ai-pulse 2s ease-in-out infinite;
-}
-
-@keyframes toolbar-ai-pulse {
-  0%,
-  100% {
-    opacity: 0.5;
-  }
-
-  50% {
-    opacity: 1;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .toolbar-ai-status-working .toolbar-ai-status-icon {
-    animation: none;
-    opacity: 1;
-  }
-}
-
-.toolbar-ai-status-completing .toolbar-ai-status-icon {
-  opacity: 1;
-  color: var(--ai-accent, #10b981);
-  animation: toolbar-ai-completing-pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes toolbar-ai-completing-pulse {
-  0%,
-  100% {
-    opacity: 0.5;
-  }
-
-  50% {
-    opacity: 0.85;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .toolbar-ai-status-completing .toolbar-ai-status-icon {
-    animation: none;
-    opacity: 0.85;
-  }
 }

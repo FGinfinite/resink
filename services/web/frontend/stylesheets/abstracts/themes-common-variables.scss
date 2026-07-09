@@ -1,15 +1,10 @@
 /* ====== Semantic CSS color variables that adjust depending on the current theme ====== */
 
 :root {
-  --editor-border-color: var(--border-divider-dark);
   --bg-primary-themed: var(--bg-dark-primary);
   --bg-secondary-themed: var(--bg-dark-secondary);
   --bg-tertiary-themed: var(--bg-dark-tertiary);
   --bg-disabled-themed: var(--bg-dark-disabled);
-  --bg-elevated-themed: var(--bg-dark-elevated);
-  --shadow-sm-themed: var(--shadow-dark-sm);
-  --shadow-md-themed: var(--shadow-dark-md);
-  --shadow-lg-themed: var(--shadow-dark-lg);
   --content-primary-themed: var(--content-primary-dark);
   --content-secondary-themed: var(--content-secondary-dark);
   --content-disabled-themed: var(--content-disabled-dark);
@@ -34,15 +29,10 @@
 }
 
 @include theme('light') {
-  --editor-border-color: var(--neutral-20);
   --bg-primary-themed: var(--bg-light-primary);
   --bg-secondary-themed: var(--bg-light-secondary);
   --bg-tertiary-themed: var(--bg-light-tertiary);
   --bg-disabled-themed: var(--bg-light-disabled);
-  --bg-elevated-themed: var(--bg-light-primary);
-  --shadow-sm-themed: 0 2px 4px 0 rgb(30 37 48 / 16%);
-  --shadow-md-themed: 0 4px 12px 0 rgb(30 37 48 / 12%), 0 2px 4px rgb(30 37 48 / 8%);
-  --shadow-lg-themed: 0 8px 16px 0 rgb(30 37 48 / 12%), 0 4px 6px 0 rgb(30 37 48 / 12%);
   --content-primary-themed: var(--content-primary);
   --content-secondary-themed: var(--content-secondary);
   --content-disabled-themed: var(--content-disabled);

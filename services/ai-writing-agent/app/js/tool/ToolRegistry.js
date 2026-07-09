@@ -75,6 +75,15 @@ export class ToolRegistry {
   }
 
   /**
+   * Create a read-only registry view containing only allowed tool names.
+   * @param {Iterable<string>} allowedNames - Tool names allowed by profile/policy
+   * @returns {ScopedToolRegistry}
+   */
+  scoped(allowedNames) {
+    return new ScopedToolRegistry(this, allowedNames)
+  }
+
+  /**
    * Unregister a tool
    * @param {string} name - Tool name
    * @returns {boolean} - Whether the tool was removed
@@ -96,6 +105,40 @@ export class ToolRegistry {
    */
   get size() {
     return this.tools.size
+  }
+}
+
+export class ScopedToolRegistry {
+  constructor(parent, allowedNames) {
+    this.parent = parent
+    this.allowedNames = new Set(allowedNames || [])
+  }
+
+  get(name) {
+    if (!this.allowedNames.has(name)) return undefined
+    return this.parent.get(name)
+  }
+
+  has(name) {
+    return this.allowedNames.has(name) && this.parent.has(name)
+  }
+
+  getAll() {
+    return this.getNames()
+      .map(name => this.parent.get(name))
+      .filter(Boolean)
+  }
+
+  getNames() {
+    return this.parent.getNames().filter(name => this.allowedNames.has(name))
+  }
+
+  getTools() {
+    return this.getAll().map(tool => tool.toOpenAIFormat())
+  }
+
+  get size() {
+    return this.getAll().length
   }
 }
 

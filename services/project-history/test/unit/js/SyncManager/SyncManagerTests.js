@@ -2,8 +2,16 @@ import sinon from 'sinon'
 import { expect } from 'chai'
 import mongodb from 'mongodb-legacy'
 import tk from 'timekeeper'
-import { File, Comment, TrackedChange, Range } from 'overleaf-editor-core'
+import {
+  File,
+  Comment,
+  TrackedChange,
+  Range,
+  TrackingProps,
+} from 'overleaf-editor-core'
+import { UnprocessableError } from 'overleaf-editor-core/lib/errors.js'
 import { strict as esmock } from 'esmock'
+import { FileContentEmptyError } from '../../../../app/js/Errors.js'
 const { ObjectId } = mongodb
 
 const MODULE_PATH = '../../../../app/js/SyncManager.js'
@@ -144,20 +152,29 @@ describe('SyncManager', function () {
       },
     }
 
-    this.SyncManager = await esmock(MODULE_PATH, {
-      '../../../../app/js/LockManager.js': this.LockManager,
-      '../../../../app/js/UpdateCompressor.js': this.UpdateCompressor,
-      '../../../../app/js/UpdateTranslator.js': this.UpdateTranslator,
-      '../../../../app/js/mongodb.js': { ObjectId, db: this.db },
-      '../../../../app/js/WebApiManager.js': this.WebApiManager,
-      '../../../../app/js/ErrorRecorder.js': this.ErrorRecorder,
-      '../../../../app/js/RedisManager.js': this.RedisManager,
-      '../../../../app/js/SnapshotManager.js': this.SnapshotManager,
-      '../../../../app/js/HistoryStoreManager.js': this.HistoryStoreManager,
-      '../../../../app/js/HashManager.js': this.HashManager,
-      '@overleaf/metrics': this.Metrics,
-      '@overleaf/settings': this.Settings,
-    })
+    this.SyncManager = await esmock(
+      MODULE_PATH,
+      {
+        '../../../../app/js/LockManager.js': this.LockManager,
+        '../../../../app/js/UpdateCompressor.js': this.UpdateCompressor,
+        '../../../../app/js/UpdateTranslator.js': this.UpdateTranslator,
+        '../../../../app/js/mongodb.js': { ObjectId, db: this.db },
+        '../../../../app/js/WebApiManager.js': this.WebApiManager,
+        '../../../../app/js/ErrorRecorder.js': this.ErrorRecorder,
+        '../../../../app/js/RedisManager.js': this.RedisManager,
+        '../../../../app/js/SnapshotManager.js': this.SnapshotManager,
+        '../../../../app/js/HistoryStoreManager.js': this.HistoryStoreManager,
+        '../../../../app/js/HashManager.js': this.HashManager,
+        '@overleaf/metrics': this.Metrics,
+        '@overleaf/settings': this.Settings,
+      },
+      {
+        'overleaf-editor-core/lib/errors.js':
+          await import('overleaf-editor-core/lib/errors.js'),
+        '../../../../app/js/Errors.js':
+          await import('../../../../app/js/Errors.js'),
+      }
+    )
   })
 
   afterEach(function () {
@@ -533,6 +550,8 @@ describe('SyncManager', function () {
           resyncProjectStructure: false,
           resyncDocContents: ['new.tex'],
           origin: { kind: 'history-resync' },
+          hardResync: false,
+          recoverCorruptedFiles: false,
         })
       })
 
@@ -549,6 +568,8 @@ describe('SyncManager', function () {
           resyncProjectStructure: false,
           resyncDocContents: ['new.tex'],
           origin: { kind: 'history-resync' },
+          hardResync: false,
+          recoverCorruptedFiles: false,
         })
       })
 
@@ -566,6 +587,8 @@ describe('SyncManager', function () {
           resyncProjectStructure: false,
           resyncDocContents: [],
           origin: { kind: 'history-resync' },
+          hardResync: false,
+          recoverCorruptedFiles: false,
         })
       })
 
@@ -585,6 +608,8 @@ describe('SyncManager', function () {
           resyncProjectStructure: false,
           resyncDocContents: ['new.tex'],
           origin: { kind: 'history-resync' },
+          hardResync: false,
+          recoverCorruptedFiles: false,
         })
       })
 
@@ -608,6 +633,8 @@ describe('SyncManager', function () {
           resyncProjectStructure: false,
           resyncDocContents: [],
           origin: { kind: 'history-resync' },
+          hardResync: false,
+          recoverCorruptedFiles: false,
         })
       })
 
@@ -632,6 +659,8 @@ describe('SyncManager', function () {
           resyncProjectStructure: false,
           resyncDocContents: [],
           origin: { kind: 'history-resync' },
+          hardResync: false,
+          recoverCorruptedFiles: false,
         })
       })
     })
@@ -1571,6 +1600,116 @@ describe('SyncManager', function () {
           expect(this.extendLock).to.have.been.called
         })
       })
+
+      describe('when the blob content is corrupted during hard resync', function () {
+        describe('and the recoverCorruptedFiles flag is true', function () {
+          beforeEach(function () {
+            this.syncState.recoverCorruptedFiles = true
+          })
+
+          async function assertRecovery(ctx, err) {
+            ctx.fileMap['main.tex'].load.rejects(err)
+            const updates = [
+              resyncProjectStructureUpdate(
+                [ctx.persistedDoc],
+                [ctx.persistedFile]
+              ),
+              docContentSyncUpdate(ctx.persistedDoc, ctx.persistedDocContent),
+            ]
+            const expandedUpdates =
+              await ctx.SyncManager.promises.expandSyncUpdates(
+                ctx.projectId,
+                ctx.historyId,
+                ctx.mostRecentChunk,
+                updates,
+                ctx.extendLock
+              )
+            expect(expandedUpdates).to.deep.equal([
+              {
+                pathname: 'main.tex',
+                new_pathname: '',
+                meta: {
+                  resync: true,
+                  origin: { kind: 'history-resync' },
+                  ts: TIMESTAMP,
+                },
+              },
+              {
+                pathname: 'main.tex',
+                doc: ctx.persistedDoc.doc,
+                docLines: ctx.persistedDocContent,
+                meta: {
+                  resync: true,
+                  origin: { kind: 'history-resync' },
+                  ts: TIMESTAMP,
+                },
+              },
+            ])
+          }
+
+          it('queues REMOVE + ADD for UnprocessableError', async function () {
+            await assertRecovery(this, new UnprocessableError('apply failed'))
+          })
+
+          it('queues REMOVE + ADD for SyntaxError', async function () {
+            await assertRecovery(this, new SyntaxError('bad JSON'))
+          })
+
+          it('queues REMOVE + ADD for FileContentEmptyError', async function () {
+            await assertRecovery(
+              this,
+              new FileContentEmptyError('null content')
+            )
+          })
+
+          it('propagates non-corruption errors during hard resync', async function () {
+            this.fileMap['main.tex'].load.rejects(
+              new Error('connection timeout')
+            )
+            const updates = [
+              resyncProjectStructureUpdate(
+                [this.persistedDoc],
+                [this.persistedFile]
+              ),
+              docContentSyncUpdate(this.persistedDoc, this.persistedDocContent),
+            ]
+            await expect(
+              this.SyncManager.promises.expandSyncUpdates(
+                this.projectId,
+                this.historyId,
+                this.mostRecentChunk,
+                updates,
+                this.extendLock
+              )
+            ).to.be.rejectedWith('connection timeout')
+          })
+        })
+
+        describe('and the recoverCorruptedFiles flag is false', function () {
+          it('propagates corruption errors', async function () {
+            this.syncState.recoverCorruptedFiles = false
+            this.fileMap['main.tex'].load.rejects(
+              new UnprocessableError('apply failed')
+            )
+            const updates = [
+              resyncProjectStructureUpdate(
+                [this.persistedDoc],
+                [this.persistedFile]
+              ),
+              docContentSyncUpdate(this.persistedDoc, this.persistedDocContent),
+            ]
+            await expect(
+              this.SyncManager.promises.expandSyncUpdates(
+                this.projectId,
+                this.historyId,
+                this.mostRecentChunk,
+                updates,
+                this.extendLock
+              )
+            ).to.be.rejectedWith('apply failed')
+          })
+        })
+      })
     })
 
     describe('syncing comments', function () {
@@ -1880,32 +2019,44 @@ describe('SyncManager', function () {
     describe('syncing tracked changes', function () {
       beforeEach(function () {
         this.loadedSnapshotDoc.getTrackedChanges().add(
-          new TrackedChange(new Range(4, 6), {
-            type: 'delete',
-            userId: USER_ID,
-            ts: new Date(TIMESTAMP),
-          })
+          new TrackedChange(
+            new Range(4, 6),
+            TrackingProps.fromRaw({
+              type: 'delete',
+              userId: USER_ID,
+              ts: new Date(TIMESTAMP).toISOString(),
+            })
+          )
         )
         this.loadedSnapshotDoc.getTrackedChanges().add(
-          new TrackedChange(new Range(10, 6), {
-            type: 'insert',
-            userId: USER_ID,
-            ts: new Date(TIMESTAMP),
-          })
+          new TrackedChange(
+            new Range(10, 6),
+            TrackingProps.fromRaw({
+              type: 'insert',
+              userId: USER_ID,
+              ts: new Date(TIMESTAMP).toISOString(),
+            })
+          )
         )
         this.loadedSnapshotDoc.getTrackedChanges().add(
-          new TrackedChange(new Range(20, 6), {
-            type: 'delete',
-            userId: USER_ID,
-            ts: new Date(TIMESTAMP),
-          })
+          new TrackedChange(
+            new Range(20, 6),
+            TrackingProps.fromRaw({
+              type: 'delete',
+              userId: USER_ID,
+              ts: new Date(TIMESTAMP).toISOString(),
+            })
+          )
         )
         this.loadedSnapshotDoc.getTrackedChanges().add(
-          new TrackedChange(new Range(40, 3), {
-            type: 'insert',
-            userId: USER_ID,
-            ts: new Date(TIMESTAMP),
-          })
+          new TrackedChange(
+            new Range(40, 3),
+            TrackingProps.fromRaw({
+              type: 'insert',
+              userId: USER_ID,
+              ts: new Date(TIMESTAMP).toISOString(),
+            })
+          )
         )
         this.changes = [
           makeTrackedChange('td1', { p: 4, d: 'quick ' }),

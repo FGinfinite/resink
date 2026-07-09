@@ -64,14 +64,179 @@ describe('ActivateSkillTool', () => {
         name: 'polish',
         description: 'Polish text',
         triggerHint: 'when polish',
-        body: '# Polish Instructions\n\nDetailed instructions here.',
+        instructions: '# Polish Instructions\n\nDetailed instructions here.',
+        references: [
+          {
+            name: 'style.md',
+            relativePath: 'references/style.md',
+          },
+        ],
+        scripts: [
+          {
+            name: 'check.js',
+            relativePath: 'scripts/check.js',
+            runtime: 'node',
+          },
+        ],
+        provenance: {
+          source: 'local-package',
+          packageName: 'polish',
+          skillFile: 'SKILL.md',
+        },
+        python: {
+          required: true,
+          status: 'missing',
+          packages: [{ name: 'pandas', specifier: '==2.2.3' }],
+        },
+        agentCapabilities: [
+          {
+            name: 'polish.reviewer',
+            version: '1.0.0',
+            description: 'Polish reviewer',
+          },
+        ],
+        events: [{
+          type: 'skill.activated',
+          skillName: 'polish',
+          references: [
+            {
+              name: 'style.md',
+              relativePath: 'references/style.md',
+            },
+          ],
+          scripts: [
+            {
+              name: 'check.js',
+              relativePath: 'scripts/check.js',
+              runtime: 'node',
+            },
+          ],
+          provenance: {
+            source: 'local-package',
+            packageName: 'polish',
+            skillFile: 'SKILL.md',
+          },
+          python: {
+            required: true,
+            status: 'missing',
+            packages: [{ name: 'pandas', specifier: '==2.2.3' }],
+          },
+        }],
       })
 
       const result = await tool.execute({ name: 'polish' }, {})
 
       expect(result.success).toBe(true)
-      expect(result.output).toBe('# Polish Instructions\n\nDetailed instructions here.')
-      expect(result.data).toEqual({ skillName: 'polish' })
+      expect(result.output).toContain('# Polish Instructions\n\nDetailed instructions here.')
+      expect(result.output).toContain('Available skill assets:')
+      expect(result.output).toContain('- references/style.md')
+      expect(result.output).toContain('- run_skill_script skill="polish" script="check.js"')
+      expect(result.output).toContain('Python environment: missing')
+      expect(result.output).toContain('pandas==2.2.3')
+      expect(result.output).toContain('- start_agent_task capabilityName="polish.reviewer"')
+      expect(result.data).toEqual({
+        skillName: 'polish',
+        instructions: '# Polish Instructions\n\nDetailed instructions here.',
+        references: [
+          {
+            name: 'style.md',
+            relativePath: 'references/style.md',
+          },
+        ],
+        scripts: [
+          {
+            name: 'check.js',
+            relativePath: 'scripts/check.js',
+            runtime: 'node',
+          },
+        ],
+        provenance: {
+          source: 'local-package',
+          packageName: 'polish',
+          skillFile: 'SKILL.md',
+        },
+        python: {
+          required: true,
+          status: 'missing',
+          packages: [{ name: 'pandas', specifier: '==2.2.3' }],
+        },
+        agentCapabilities: [
+          {
+            name: 'polish.reviewer',
+            version: '1.0.0',
+            description: 'Polish reviewer',
+          },
+        ],
+        events: [{
+          type: 'skill.activated',
+          skillName: 'polish',
+          references: [
+            {
+              name: 'style.md',
+              relativePath: 'references/style.md',
+            },
+          ],
+          scripts: [
+            {
+              name: 'check.js',
+              relativePath: 'scripts/check.js',
+              runtime: 'node',
+            },
+          ],
+          provenance: {
+            source: 'local-package',
+            packageName: 'polish',
+            skillFile: 'SKILL.md',
+          },
+          python: {
+            required: true,
+            status: 'missing',
+            packages: [{ name: 'pandas', specifier: '==2.2.3' }],
+          },
+          agentCapabilities: [
+            {
+              name: 'polish.reviewer',
+              version: '1.0.0',
+              description: 'Polish reviewer',
+            },
+          ],
+        }],
+      })
+    })
+
+
+    it('returns empty references and scripts arrays when package has none', async () => {
+      mockSkillRegistry.get.mockReturnValue({
+        name: 'condense',
+        instructions: '# Condense Instructions',
+      })
+
+      const result = await tool.execute({ name: 'condense' }, {})
+
+      expect(result.success).toBe(true)
+      expect(result.output).toContain('# Condense Instructions')
+      expect(result.output).toContain('Available skill assets:')
+      expect(result.output).toContain('References: none')
+      expect(result.output).toContain('Scripts: none')
+      expect(result.output).toContain('Python environment: none')
+      expect(result.data).toEqual({
+        skillName: 'condense',
+        instructions: '# Condense Instructions',
+        references: [],
+        scripts: [],
+        agentCapabilities: [],
+        python: { required: false, status: 'none' },
+        provenance: {},
+        events: [{
+          type: 'skill.activated',
+          skillName: 'condense',
+          references: [],
+          scripts: [],
+          agentCapabilities: [],
+          python: { required: false, status: 'none' },
+          provenance: {},
+        }],
+      })
     })
 
     it('returns error for unknown skill', async () => {

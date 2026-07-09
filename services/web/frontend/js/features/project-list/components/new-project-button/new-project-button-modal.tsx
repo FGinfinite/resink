@@ -5,9 +5,10 @@ import { JSXElementConstructor, lazy, Suspense, useCallback } from 'react'
 import { Nullable } from '../../../../../../types/utils'
 import { FullSizeLoadingSpinner } from '@/shared/components/loading-spinner'
 import { useLocation } from '@/shared/hooks/use-location'
+import { Tag } from '../../../../../../app/src/Features/Tags/types'
 
 const UploadProjectModal = lazy(() => import('./upload-project-modal'))
-const ImportDocxModal = lazy(() => import('./import-docx-modal'))
+const ImportDocumentModal = lazy(() => import('./import-document-modal'))
 
 export type NewProjectButtonModalVariant =
   | 'blank_project'
@@ -15,13 +16,19 @@ export type NewProjectButtonModalVariant =
   | 'upload_project'
   | 'import_from_github'
   | 'import_docx'
+  | 'import_markdown'
 
 type NewProjectButtonModalProps = {
   modal: Nullable<NewProjectButtonModalVariant>
   onHide: () => void
+  initialTags?: Tag[]
 }
 
-function NewProjectButtonModal({ modal, onHide }: NewProjectButtonModalProps) {
+function NewProjectButtonModal({
+  modal,
+  onHide,
+  initialTags,
+}: NewProjectButtonModalProps) {
   const [importProjectFromGithubModalWrapper] = importOverleafModules(
     'importProjectFromGithubModalWrapper'
   )
@@ -32,9 +39,9 @@ function NewProjectButtonModal({ modal, onHide }: NewProjectButtonModalProps) {
   const location = useLocation()
 
   const openProject = useCallback(
-    (projectId: string, isConvertedFromDocx: boolean = false) => {
-      const url = isConvertedFromDocx
-        ? `/project/${projectId}?converted-from-docx=true`
+    (projectId: string, convertedFrom?: string) => {
+      const url = convertedFrom
+        ? `/project/${projectId}?converted-from=${convertedFrom}`
         : `/project/${projectId}`
 
       location.assign(url)
@@ -44,9 +51,9 @@ function NewProjectButtonModal({ modal, onHide }: NewProjectButtonModalProps) {
 
   switch (modal) {
     case 'blank_project':
-      return <BlankProjectModal onHide={onHide} />
+      return <BlankProjectModal onHide={onHide} initialTags={initialTags} />
     case 'example_project':
-      return <ExampleProjectModal onHide={onHide} />
+      return <ExampleProjectModal onHide={onHide} initialTags={initialTags} />
     case 'upload_project':
       return (
         <Suspense fallback={<FullSizeLoadingSpinner delay={500} />}>
@@ -56,7 +63,21 @@ function NewProjectButtonModal({ modal, onHide }: NewProjectButtonModalProps) {
     case 'import_docx':
       return (
         <Suspense fallback={<FullSizeLoadingSpinner delay={500} />}>
-          <ImportDocxModal onHide={onHide} openProject={openProject} />
+          <ImportDocumentModal
+            type="docx"
+            onHide={onHide}
+            openProject={openProject}
+          />
+        </Suspense>
+      )
+    case 'import_markdown':
+      return (
+        <Suspense fallback={<FullSizeLoadingSpinner delay={500} />}>
+          <ImportDocumentModal
+            type="markdown"
+            onHide={onHide}
+            openProject={openProject}
+          />
         </Suspense>
       )
     case 'import_from_github':

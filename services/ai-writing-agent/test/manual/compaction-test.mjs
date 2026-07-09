@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+/* eslint-disable import/no-extraneous-dependencies */
+
 /**
  * Compaction End-to-End Stress Test
  *
@@ -21,9 +23,11 @@
  *   --verbose                          打印完整 SSE 事件流
  */
 
-import { readFileSync, existsSync } from 'fs'
-import { fileURLToPath } from 'url'
-import { dirname, join } from 'path'
+import { readFileSync, existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+import { chromium } from 'playwright'
+import bcrypt from 'bcryptjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -62,17 +66,27 @@ const dotenv = loadDotEnv(join(serviceRoot, '.env'))
 
 const BASE_URL = cli['base-url'] || 'http://localhost:3060'
 const PROJECT_ID = cli.project
+const DOC_ID = cli.doc || '6a390bf87a13c32e536c27a1'
 const MAX_ROUNDS = Number(cli.rounds || '8')
 const VERBOSE = cli.verbose === 'true'
-const MONGO_URL = dotenv.MONGO_CONNECTION_STRING ||
+const WEB_PROXY_MODE = cli['web-proxy'] === 'true'
+const EMAIL = cli.email || process.env.AGENT_SMOKE_EMAIL || 'agent-smoke@example.com'
+const PASSWORD = cli.password || process.env.AGENT_SMOKE_PASSWORD || 'AgentSmoke123!'
+const MONGO_URL = cli['mongo-url'] ||
   process.env.MONGO_CONNECTION_STRING ||
+  dotenv.MONGO_CONNECTION_STRING ||
   'mongodb://127.0.0.1:27017/sharelatex?directConnection=true'
+const RUN_MARKER = `compaction-test-${Date.now()}`
+const SMOKE_USER_LOCK_ID = 'agent-smoke-user-password'
+const SMOKE_USER_LOCK_TTL_MS = 10 * 60_000
 
 if (!PROJECT_ID) {
   console.error('用法: node test/manual/compaction-test.mjs --project=<projectId>')
   console.error('')
   console.error('可选参数:')
   console.error('  --base-url=http://localhost:3060')
+  console.error('  --web-proxy=true')
+  console.error('  --mongo-url=mongodb://127.0.0.1:37017/sharelatex?directConnection=true')
   console.error('  --rounds=8')
   console.error('  --verbose')
   process.exit(1)
@@ -189,6 +203,163 @@ async function deleteSession(sessionId) {
   } catch { /* best effort */ }
 }
 
+async function collection(db, name) {
+  return db.collection(name)
+}
+
+async function acquireSmokeUserLock(db) {
+  const locks = await collection(db, 'aiAgentManualSmokeLocks')
+  const owner = RUN_MARKER
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    try {
+      await locks.insertOne({
+        _id: SMOKE_USER_LOCK_ID,
+        owner,
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + SMOKE_USER_LOCK_TTL_MS),
+      })
+      return async () => {
+        await locks.deleteOne({ _id: SMOKE_USER_LOCK_ID, owner }).catch(() => {})
+      }
+    } catch (error) {
+      if (error.code !== 11000) throw error
+      await locks.deleteOne({
+        _id: SMOKE_USER_LOCK_ID,
+        expiresAt: { $lt: new Date() },
+      })
+      await new Promise(resolve => setTimeout(resolve, 1000))
+    }
+  }
+  throw new Error('Timed out waiting for smoke user password lock')
+}
+
+async function restorePassword(db, user, originalHash, smokeHash) {
+  if (!user || !originalHash || !smokeHash) return
+  const result = await (await collection(db, 'users')).updateOne(
+    { _id: user._id, hashedPassword: smokeHash },
+    { $set: { hashedPassword: originalHash } }
+  )
+  if (result.modifiedCount === 0) {
+    const currentUser = await (await collection(db, 'users')).findOne(
+      { _id: user._id },
+      { projection: { hashedPassword: 1 } }
+    )
+    if (currentUser?.hashedPassword !== originalHash) {
+      console.warn('WARN: smoke user password changed during run; not overwriting concurrent hash update')
+    }
+  }
+}
+
+async function login(page) {
+  await page.goto(`${BASE_URL}/login`, { waitUntil: 'domcontentloaded' })
+  const csrf = await page.locator('input[name="_csrf"]').inputValue()
+  const response = await page.request.post(`${BASE_URL}/login`, {
+    form: { _csrf: csrf, email: EMAIL, password: PASSWORD },
+    maxRedirects: 0,
+  })
+  if (![200, 302].includes(response.status())) {
+    throw new Error(`Login failed with status ${response.status()}: ${await response.text()}`)
+  }
+}
+
+async function getCsrfToken(page) {
+  await page.goto(`${BASE_URL}/project/${PROJECT_ID}`, {
+    waitUntil: 'domcontentloaded',
+  })
+  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {})
+  const token = await page.locator('meta[name="ol-csrfToken"]').getAttribute('content')
+  if (!token) throw new Error('Could not read ol-csrfToken from project page')
+  return token
+}
+
+async function webApiRequest(page, csrfToken, method, path, data = undefined) {
+  const response = await page.request.fetch(`${BASE_URL}/api/ai${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Csrf-Token': csrfToken,
+    },
+    data,
+  })
+  const text = await response.text()
+  if (!response.ok()) {
+    throw new Error(`HTTP ${response.status()} ${method} ${path}: ${text}`)
+  }
+  return text ? JSON.parse(text) : null
+}
+
+async function seedCompactionMessages(db, sessionId) {
+  const { ObjectId } = await import('mongodb')
+  const sessionObjectId = new ObjectId(sessionId)
+  const now = new Date()
+  await (await collection(db, 'aiMessages')).deleteMany({ sessionId: sessionObjectId })
+  await (await collection(db, 'aiMessages')).insertMany([
+    {
+      sessionId: sessionObjectId,
+      seq: 1,
+      role: 'user',
+      content: `${RUN_MARKER}: Please remember that I prefer concise Chinese progress updates.`,
+      timestamp: now,
+    },
+    {
+      sessionId: sessionObjectId,
+      seq: 2,
+      role: 'assistant',
+      content: 'Understood.',
+      timestamp: now,
+    },
+    {
+      sessionId: sessionObjectId,
+      seq: 3,
+      role: 'user',
+      content: 'This is a durable project convention for future agent work.',
+      timestamp: now,
+    },
+    {
+      sessionId: sessionObjectId,
+      seq: 4,
+      role: 'assistant',
+      content: 'I will keep that project convention in mind.',
+      timestamp: now,
+    },
+  ])
+  await (await collection(db, 'aiSessions')).updateOne(
+    { _id: sessionObjectId },
+    {
+      $set: {
+        _nextSeq: 5,
+        _latestSummarySeq: null,
+        updatedAt: now,
+      },
+    }
+  )
+}
+
+async function cleanupWebMode(db, sessionId, userId) {
+  const { ObjectId } = await import('mongodb')
+  const sessionObjectId = sessionId ? new ObjectId(sessionId) : null
+  await Promise.all([
+    sessionObjectId
+      ? (await collection(db, 'aiSessions')).deleteOne({ _id: sessionObjectId })
+      : Promise.resolve(),
+    sessionObjectId
+      ? (await collection(db, 'aiMessages')).deleteMany({ sessionId: sessionObjectId })
+      : Promise.resolve(),
+    sessionId
+      ? (await collection(db, 'aiSessionSummaries')).deleteMany({ sessionId })
+      : Promise.resolve(),
+    sessionId
+      ? (await collection(db, 'aiMemorySuggestions')).deleteMany({ sessionId })
+      : Promise.resolve(),
+    userId
+      ? (await collection(db, 'aiMemories')).deleteMany({
+          userId,
+          content: { $regex: RUN_MARKER },
+        })
+      : Promise.resolve(),
+  ])
+}
+
 // ========== Test Phases ==========
 
 const INFLATE_PROMPTS = [
@@ -287,17 +458,37 @@ async function phaseDbCheck(sessionId) {
 
     const dbName = new URL(MONGO_URL.replace('mongodb://', 'http://')).pathname.slice(1) || 'sharelatex'
     const database = client.db(dbName)
-    const collection = database.collection('aiSessions')
+    const sessions = database.collection('aiSessions')
+    const messagesCollection = database.collection('aiMessages')
+    const summariesCollection = database.collection('aiSessionSummaries')
 
-    const session = await collection.findOne({ _id: new ObjectId(sessionId) })
+    const session = await sessions.findOne({ _id: new ObjectId(sessionId) })
     if (!session) {
       console.log(`  ${C.red}✗ Session not found in DB${C.reset}`)
-      return { summaryInDb: false, summaryPreview: null, messageCount: 0 }
+      return {
+        summaryInDb: false,
+        durableSummaryInDb: false,
+        summaryPreview: null,
+        messageCount: 0,
+      }
     }
 
-    const messages = session.messages || []
-    const summaryMsg = messages.find(m => m.isSummary === true)
-    const messageCount = messages.length
+    const sessionObjectId = new ObjectId(sessionId)
+    const messageCount = await messagesCollection.countDocuments({
+      sessionId: sessionObjectId,
+    })
+    const summaryMsg = await messagesCollection.findOne({
+      sessionId: sessionObjectId,
+      isSummary: true,
+    }, {
+      sort: { seq: -1 },
+    })
+    const durableSummary = await summariesCollection.findOne({
+      sessionId,
+      status: 'active',
+    }, {
+      sort: { createdAt: -1 },
+    })
 
     console.log(`  Total messages in DB: ${messageCount}`)
 
@@ -307,14 +498,36 @@ async function phaseDbCheck(sessionId) {
       console.log(`  Compacted at: ${summaryMsg.compactedAt || 'N/A'}`)
       console.log(`  ${C.dim}Preview:${C.reset}`)
       console.log(`  ${C.dim}${preview}${C.reset}`)
-      return { summaryInDb: true, summaryPreview: preview, messageCount }
+      if (durableSummary) {
+        console.log(`  ${C.green}✓ Durable summary found in aiSessionSummaries${C.reset}`)
+        console.log(`  Source seq range: ${durableSummary.sourceMessageRange?.fromSeq ?? 0}-${durableSummary.sourceMessageRange?.toSeq ?? 0}`)
+      } else {
+        console.log(`  ${C.yellow}✗ No durable summary found in aiSessionSummaries${C.reset}`)
+      }
+      return {
+        summaryInDb: true,
+        durableSummaryInDb: Boolean(durableSummary),
+        summaryPreview: preview,
+        messageCount,
+      }
     } else {
       console.log(`  ${C.yellow}✗ No summary message found (isSummary: true)${C.reset}`)
-      return { summaryInDb: false, summaryPreview: null, messageCount }
+      return {
+        summaryInDb: false,
+        durableSummaryInDb: Boolean(durableSummary),
+        summaryPreview: null,
+        messageCount,
+      }
     }
   } catch (err) {
     console.log(`  ${C.red}MongoDB error: ${err.message}${C.reset}`)
-    return { summaryInDb: false, summaryPreview: null, messageCount: 0, error: err.message }
+    return {
+      summaryInDb: false,
+      durableSummaryInDb: false,
+      summaryPreview: null,
+      messageCount: 0,
+      error: err.message,
+    }
   } finally {
     if (client) await client.close()
   }
@@ -343,6 +556,8 @@ function printReport(results) {
   // DB check
   const dbIcon = dbCheck.summaryInDb ? `${C.green}✓${C.reset}` : `${C.red}✗${C.reset}`
   console.log(`  Summary saved to DB:      ${dbIcon} (isSummary: true)`)
+  const durableIcon = dbCheck.durableSummaryInDb ? `${C.green}✓${C.reset}` : `${C.red}✗${C.reset}`
+  console.log(`  Durable summary saved:    ${durableIcon} (aiSessionSummaries)`)
   console.log(`  Messages in DB:           ${dbCheck.messageCount}`)
 
   if (dbCheck.summaryPreview) {
@@ -362,7 +577,10 @@ function printReport(results) {
 
   // Final verdict
   console.log('')
-  const pass = triggered && inflate.compactionSuccess && dbCheck.summaryInDb
+  const pass = triggered &&
+    inflate.compactionSuccess &&
+    dbCheck.summaryInDb &&
+    dbCheck.durableSummaryInDb
   const verdict = pass ? `${C.green}${C.bold}PASS${C.reset}` : `${C.red}${C.bold}FAIL${C.reset}`
   console.log(`  Result: ${verdict}`)
   console.log(`\n${'═'.repeat(50)}\n`)
@@ -370,9 +588,82 @@ function printReport(results) {
   return pass
 }
 
+async function runWebProxyManualEndpointMode() {
+  const { MongoClient } = await import('mongodb')
+  const client = new MongoClient(MONGO_URL)
+  await client.connect()
+  const database = client.db(new URL(MONGO_URL.replace('mongodb://', 'http://')).pathname.slice(1) || 'sharelatex')
+  let browser
+  let user
+  let originalHash
+  let smokeHash
+  let releaseLock
+  let sessionId
+
+  try {
+    releaseLock = await acquireSmokeUserLock(database)
+    user = await (await collection(database, 'users')).findOne({ email: EMAIL })
+    if (!user) throw new Error(`Missing smoke user ${EMAIL}`)
+    originalHash = user.hashedPassword
+    smokeHash = bcrypt.hashSync(PASSWORD, 12)
+    await (await collection(database, 'users')).updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          hashedPassword: smokeHash,
+          analyticsId: user.analyticsId || user._id.toString(),
+        },
+      }
+    )
+
+    browser = await chromium.launch({ headless: true })
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+    await login(page)
+    const csrfToken = await getCsrfToken(page)
+    const sessionBody = await webApiRequest(page, csrfToken, 'POST', '/sessions', {
+      projectId: PROJECT_ID,
+      docId: DOC_ID,
+      runtimeMode: 'agent-loop-v2',
+    })
+    sessionId = sessionBody.session.id
+    await seedCompactionMessages(database, sessionId)
+    await webApiRequest(page, csrfToken, 'POST', `/sessions/${sessionId}/compact`)
+
+    const dbCheck = await phaseDbCheck(sessionId)
+    const suggestions = await (await collection(database, 'aiMemorySuggestions'))
+      .find({ sessionId, status: 'pending' })
+      .toArray()
+    const memories = await (await collection(database, 'aiMemories'))
+      .find({
+        userId: user._id.toString(),
+        'createdFrom.sessionId': sessionId,
+        status: { $ne: 'deleted' },
+      })
+      .toArray()
+    const pass = dbCheck.summaryInDb &&
+      dbCheck.durableSummaryInDb &&
+      memories.length === 0
+    console.log(`  Pending memory suggestions: ${suggestions.length}`)
+    console.log(`  Memories created from compaction: ${memories.length}`)
+    console.log(`  Result: ${pass ? C.green + C.bold + 'PASS' + C.reset : C.red + C.bold + 'FAIL' + C.reset}`)
+    process.exitCode = pass ? 0 : 1
+  } finally {
+    if (browser) await browser.close().catch(() => {})
+    await cleanupWebMode(database, sessionId, user?._id?.toString?.()).catch(() => {})
+    await restorePassword(database, user, originalHash, smokeHash).catch(() => {})
+    await releaseLock?.()
+    await client.close()
+  }
+}
+
 // ========== Main ==========
 
 async function main() {
+  if (WEB_PROXY_MODE) {
+    await runWebProxyManualEndpointMode()
+    return
+  }
+
   console.log(`${'═'.repeat(50)}`)
   console.log(`  COMPACTION E2E STRESS TEST`)
   console.log(`${'═'.repeat(50)}`)

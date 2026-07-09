@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable no-console */
 
 /**
  * Migration script: Move messages from aiSessions.messages to aiMessages collection.

@@ -1,0 +1,18 @@
+{
+  "runtime": {
+    "python": {
+      "pythonVersion": ">=3.12",
+      "network": "none",
+      "dependencies": [
+        "typing-extensions==4.12.2"
+      ]
+    }
+  },
+  "scripts": [
+    {
+      "name": "dependency_probe.py",
+      "path": "scripts/dependency_probe.py",
+      "runtime": "python3"
+    }
+  ]
+}

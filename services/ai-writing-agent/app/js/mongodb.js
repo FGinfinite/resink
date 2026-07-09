@@ -16,11 +16,29 @@ const mongoDb = mongoClient.db()
 export const db = {
   aiSessions: mongoDb.collection('aiSessions'),
   aiMessages: mongoDb.collection('aiMessages'),
+  aiAgentToolCalls: mongoDb.collection('aiAgentToolCalls'),
+  aiAgentChangeSets: mongoDb.collection('aiAgentChangeSets'),
+  aiAgentDraftChanges: mongoDb.collection('aiAgentDraftChanges'),
+  aiAgentApplyOperations: mongoDb.collection('aiAgentApplyOperations'),
   aiPendingChanges: mongoDb.collection('aiPendingChanges'),
-  aiProjectRules: mongoDb.collection('aiProjectRules'),
   aiCompletionRules: mongoDb.collection('aiCompletionRules'),
   aiAttachments: mongoDb.collection('aiAttachments'),
   aiFiles: mongoDb.collection('aiFiles'),
+  aiSandboxSessions: mongoDb.collection('aiSandboxSessions'),
+  aiSandboxArtifacts: mongoDb.collection('aiSandboxArtifacts'),
+  aiAgentWorkspaces: mongoDb.collection('aiAgentWorkspaces'),
+  aiAgentTeams: mongoDb.collection('aiAgentTeams'),
+  aiAgentTasks: mongoDb.collection('aiAgentTasks'),
+  aiAgentContextPacks: mongoDb.collection('aiAgentContextPacks'),
+  aiAgentTaskResults: mongoDb.collection('aiAgentTaskResults'),
+  aiAgentTeamEvents: mongoDb.collection('aiAgentTeamEvents'),
+  aiMemories: mongoDb.collection('aiMemories'),
+  aiMemorySuggestions: mongoDb.collection('aiMemorySuggestions'),
+  aiSessionSummaries: mongoDb.collection('aiSessionSummaries'),
+  aiContextSnapshots: mongoDb.collection('aiContextSnapshots'),
+  aiPythonDependencyRequests: mongoDb.collection('aiPythonDependencyRequests'),
+  aiPythonEnvironmentSnapshots: mongoDb.collection('aiPythonEnvironmentSnapshots'),
+  aiPythonEnvironmentUsages: mongoDb.collection('aiPythonEnvironmentUsages'),
   aiModelConfigs: mongoDb.collection('aiModelConfigs'),
   aiModelSlots: mongoDb.collection('aiModelSlots'),
   aiSystemConfig: mongoDb.collection('aiSystemConfig'),
@@ -39,8 +57,27 @@ export async function ensureIndexes() {
   await db.aiSessions.createIndex({ parentId: 1 })
   await db.aiSessions.createIndex({ rootSessionId: 1 })
   await db.aiSessions.createIndex({ projectId: 1, parentId: 1, status: 1 })
+  await db.aiSessions.createIndex({
+    projectId: 1,
+    userId: 1,
+    parentId: 1,
+    status: 1,
+    updatedAt: -1,
+  })
+  await db.aiSessions.createIndex({ expiresAt: 1 })
   await db.aiMessages.createIndex({ sessionId: 1, seq: 1 }, { unique: true })
-  await db.aiProjectRules.createIndex({ projectId: 1 }, { unique: true })
+  await db.aiAgentToolCalls.createIndex(
+    { sessionId: 1, toolCallId: 1 },
+    { unique: true }
+  )
+  await db.aiAgentToolCalls.createIndex({ sessionId: 1, createdAt: 1 })
+  await db.aiAgentChangeSets.createIndex({ sessionId: 1, createdAt: -1 })
+  await db.aiAgentChangeSets.createIndex({ projectId: 1, userId: 1, status: 1 })
+  await db.aiAgentDraftChanges.createIndex({ changeSetId: 1, createdAt: 1 })
+  await db.aiAgentDraftChanges.createIndex({ sessionId: 1, status: 1 })
+  await db.aiAgentDraftChanges.createIndex({ projectId: 1, userId: 1, status: 1 })
+  await db.aiAgentApplyOperations.createIndex({ changeId: 1, startedAt: -1 })
+  await db.aiAgentApplyOperations.createIndex({ changeSetId: 1, startedAt: -1 })
   await db.aiCompletionRules.createIndex({ projectId: 1 }, { unique: true })
   await db.aiAttachments.createIndex({ sessionId: 1 })
   await db.aiAttachments.createIndex(
@@ -54,6 +91,44 @@ export async function ensureIndexes() {
     { expiresAt: 1 },
     { expireAfterSeconds: 0 }
   )
+
+  // Sandbox session orchestration indexes
+  await db.aiSandboxSessions.createIndex({ userId: 1, createdAt: -1 })
+  await db.aiSandboxSessions.createIndex({ projectId: 1, createdAt: -1 })
+  await db.aiSandboxSessions.createIndex({ status: 1, updatedAt: -1 })
+  await db.aiSandboxArtifacts.createIndex({ sessionId: 1 })
+  await db.aiSandboxArtifacts.createIndex(
+    { expiresAt: 1 },
+    { expireAfterSeconds: 0 }
+  )
+  await db.aiAgentWorkspaces.createIndex({ sessionId: 1, status: 1 })
+  await db.aiAgentWorkspaces.createIndex({ projectId: 1, updatedAt: -1 })
+  await db.aiAgentWorkspaces.createIndex({ expiresAt: 1 })
+  await db.aiAgentTeams.createIndex({ rootSessionId: 1, status: 1, updatedAt: -1 })
+  await db.aiAgentTeams.createIndex({ projectId: 1, userId: 1, status: 1, updatedAt: -1 })
+  await db.aiAgentTasks.createIndex({ teamId: 1, status: 1, priority: -1 })
+  await db.aiAgentTasks.createIndex({ rootSessionId: 1, status: 1, updatedAt: -1 })
+  await db.aiAgentTasks.createIndex({ childSessionId: 1 }, { sparse: true })
+  await db.aiAgentContextPacks.createIndex({ teamId: 1, taskId: 1 })
+  await db.aiAgentContextPacks.createIndex({ projectId: 1, createdAt: -1 })
+  await db.aiAgentTaskResults.createIndex({ teamId: 1, taskId: 1 })
+  await db.aiAgentTeamEvents.createIndex({ teamId: 1, createdAt: 1 })
+  await db.aiAgentTeamEvents.createIndex({ taskId: 1, createdAt: 1 }, { sparse: true })
+  await db.aiMemories.createIndex({ userId: 1, scope: 1, status: 1, updatedAt: -1 })
+  await db.aiMemories.createIndex({ userId: 1, projectId: 1, status: 1, updatedAt: -1 })
+  await db.aiMemories.createIndex({ userId: 1, status: 1, content: 'text', tags: 'text' })
+  await db.aiMemorySuggestions.createIndex({ userId: 1, status: 1, createdAt: -1 })
+  await db.aiMemorySuggestions.createIndex({ sessionId: 1, status: 1, createdAt: -1 })
+  await db.aiMemorySuggestions.createIndex({ expiresAt: 1 })
+  await db.aiSessionSummaries.createIndex({ sessionId: 1, status: 1, createdAt: -1 })
+  await db.aiSessionSummaries.createIndex({ projectId: 1, userId: 1, status: 1, createdAt: -1 })
+  await db.aiContextSnapshots.createIndex({ sessionId: 1, turnId: 1 })
+  await db.aiContextSnapshots.createIndex({ projectId: 1, userId: 1, createdAt: -1 })
+  await db.aiPythonDependencyRequests.createIndex({ projectId: 1, status: 1, updatedAt: -1 })
+  await db.aiPythonDependencyRequests.createIndex({ fingerprint: 1, projectId: 1 }, { unique: true })
+  await db.aiPythonEnvironmentSnapshots.createIndex({ environmentKey: 1 }, { unique: true, sparse: true })
+  await db.aiPythonEnvironmentSnapshots.createIndex({ skillName: 1, lockHash: 1 })
+  await db.aiPythonEnvironmentUsages.createIndex({ environmentId: 1, projectId: 1, attachedAt: -1 })
 
   // Model config indexes
   await db.aiModelConfigs.createIndex({ enabled: 1 })

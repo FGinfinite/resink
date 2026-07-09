@@ -10,7 +10,6 @@ export default {
   getFile,
   getFileHead,
   insertFile,
-  deleteFile,
 }
 
 function getFile(req, res, next) {
@@ -127,22 +126,6 @@ function insertFile(req, res, next) {
       next(err)
     } else {
       res.sendStatus(200)
-    }
-  })
-}
-
-function deleteFile(req, res, next) {
-  metrics.inc('deleteFile')
-  const { key, bucket } = req
-
-  req.requestLogger.setMessage('deleting file')
-  req.requestLogger.addFields({ key, bucket })
-
-  FileHandler.deleteFile(bucket, key, function (err) {
-    if (err) {
-      next(err)
-    } else {
-      res.sendStatus(204)
     }
   })
 }

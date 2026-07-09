@@ -98,7 +98,7 @@ describe('SandboxedCompiles', function () {
       stopCompile({ delay: 1000 })
       cy.findByRole('region', { name: 'PDF preview' })
         .invoke('text')
-        .should('match', /No PDF|PDF Rendering Error|Compilation cancelled/)
+        .should('match', /Compilation cancelled/)
       // Check that the previous compile is not running in the background by
       // disabling the infinite loop and recompiling
       cy.findByText('\\def').parent().click()
@@ -333,7 +333,7 @@ describe('SandboxedCompiles', function () {
   })
 
   // https://github.com/overleaf/internal/issues/20216
-  // eslint-disable-next-line mocha/no-skipped-tests
+  // eslint-disable-next-line mocha/no-pending-tests
   describe.skip('unavailable in CE', function () {
     if (isExcludedBySharding('CE_CUSTOM_1')) return
     startWith({ pro: false, vars: enabledVars, resetData: true })

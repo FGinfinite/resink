@@ -28,6 +28,7 @@ import SplitTestHandler from '../SplitTests/SplitTestHandler.mjs'
 import SplitTestSessionHandler from '../SplitTests/SplitTestSessionHandler.mjs'
 import TutorialHandler from '../Tutorial/TutorialHandler.mjs'
 import SubscriptionHelper from '../Subscription/SubscriptionHelper.mjs'
+import CustomerIoPlanHelpers from '../Subscription/CustomerIoPlanHelpers.mjs'
 import PermissionsManager from '../Authorization/PermissionsManager.mjs'
 import AnalyticsManager from '../Analytics/AnalyticsManager.mjs'
 import { OnboardingDataCollection } from '../../models/OnboardingDataCollection.mjs'
@@ -129,6 +130,7 @@ async function projectListPage(req, res, next) {
   let usersIndividualSubscription
   /** @type {any[]} */
   let usersGroupSubscriptions = []
+  /** @type {any[]} */
   let usersManagedGroupSubscriptions = []
   let survey
   let userIsMemberOfGroupSubscription = false
@@ -179,7 +181,7 @@ async function projectListPage(req, res, next) {
     userId,
     `email isAdmin emails features alphaProgram betaProgram lastPrimaryEmailCheck lastActive signUpDate ace refProviders${
       isSaas
-        ? ' enrollment writefull completedTutorials aiFeatures aiErrorAssistant'
+        ? ' enrollment writefull completedTutorials aiFeatures aiErrorAssistant labsProgram'
         : ''
     }`
   )
@@ -200,7 +202,14 @@ async function projectListPage(req, res, next) {
   let role
 
   if (isSaas) {
-    if (user.isAdmin) await _checkForOldDebugProjects(userId)
+    if (user.isAdmin) {
+      await _checkForOldDebugProjects(userId).catch(err => {
+        logger.warn(
+          { err, userId },
+          'failed to check old debug projects/managing notifications'
+        )
+      })
+    }
 
     await SplitTestSessionHandler.promises.sessionMaintenance(req, user)
 
@@ -264,8 +273,8 @@ async function projectListPage(req, res, next) {
 
     customerIoEnabled = true
 
-    AnalyticsManager.setUserPropertyForUserInBackground(
-      userId,
+    AnalyticsManager.setUserPropertyForSessionInBackground(
+      req.session,
       'customer-io-integration',
       true
     )
@@ -492,8 +501,13 @@ async function projectListPage(req, res, next) {
   let showInrGeoBanner = false
   let showLATAMBanner = false
   let recommendedCurrency
-  const { countryCode, currencyCode } =
-    await GeoIpLookup.promises.getCurrencyCode(req.ip)
+  let countryCode
+  let currencyCode
+  if (isSaas) {
+    const currencyData = await GeoIpLookup.promises.getCurrencyCode(req.ip)
+    countryCode = currencyData.countryCode
+    currencyCode = currencyData.currencyCode
+  }
 
   if (
     usersBestSubscription?.type === 'free' ||
@@ -525,12 +539,13 @@ async function projectListPage(req, res, next) {
   const aiBlocked =
     Features.hasFeature('saas') && !(await _canUseAIAssist(user))
   const hasAiAssist =
-    Features.hasFeature('saas') && (await _userHasAIAssist(user))
+    Features.hasFeature('saas') && (await _userHasAIAssist(req, res, user))
 
   const splitTests = [
     // Split tests that will be made available to the frontend
     'import-docx',
     'overleaf-library',
+    'import-markdown',
   ].filter(Boolean)
 
   await Promise.all(
@@ -545,12 +560,23 @@ async function projectListPage(req, res, next) {
     user
   )
 
-  const groupRole = userIsMemberOfGroupSubscription
-    ? usersManagedGroupSubscriptions?.length > 0 ||
-      usersGroupSubscriptions.some(sub => sub.userIsGroupManager)
-      ? 'admin'
-      : 'member'
-    : undefined
+  let groupRole
+  if (userIsMemberOfGroupSubscription) {
+    const userIdStr = userId.toString()
+    const isGroupAdmin = usersManagedGroupSubscriptions?.some(
+      sub => sub.admin_id?._id?.toString() === userIdStr
+    )
+    const isGroupManager =
+      usersManagedGroupSubscriptions?.length > 0 ||
+      usersGroupSubscriptions?.some(sub => sub.userIsGroupManager)
+    if (isGroupAdmin) {
+      groupRole = 'admin'
+    } else if (isGroupManager) {
+      groupRole = 'manager'
+    } else {
+      groupRole = 'member'
+    }
+  }
 
   Modules.promises.hooks
     .fire('setUserProperties', userId, {
@@ -572,6 +598,7 @@ async function projectListPage(req, res, next) {
       ...(usedLatex && { used_latex: usedLatex }),
       ...(countryCode && { country: countryCode }),
       ...(commonsInstitution && { commons_institution: commonsInstitution }),
+      ...CustomerIoPlanHelpers.getAffiliationProperties(userEmails),
       ...(groupRole && { group_role: groupRole }),
       is_managed_user: Boolean(user.enrollment?.managedBy),
       ...(user.email && { email: user.email }),
@@ -922,16 +949,18 @@ function _hasActiveFilter(filters) {
 }
 
 /**
+ * @param {any} req
+ * @param {any} res
  * @param {any} user
  */
 // todo: quota clean-up: rename function and vars
-async function _userHasAIAssist(user) {
+async function _userHasAIAssist(req, res, user) {
   let hasPremiumAiFeatures
-  const inQuotaSplitTest =
-    await SplitTestHandler.promises.featureFlagEnabledForUser(
-      user._id,
-      'plans-2026-phase-1'
-    )
+  const inQuotaSplitTest = await SplitTestHandler.promises.featureFlagEnabled(
+    req,
+    res,
+    'plans-2026-phase-1'
+  )
   if (inQuotaSplitTest) {
     hasPremiumAiFeatures =
       user.features?.aiUsageQuota === Settings.aiFeatures.unlimitedQuota

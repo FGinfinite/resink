@@ -23,7 +23,7 @@ export default function UpgradeButton({
       <OLButton
         variant="premium"
         size="sm"
-        href={`/user/subscription/plans?itm_referrer=${referrer}`}
+        href={`/user/subscription/choose-your-plan?itm_referrer=${referrer}&paywall-type=${source}`}
         target="_blank"
         rel="noreferrer"
         onClick={handleClick}

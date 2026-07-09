@@ -108,9 +108,12 @@ export class ToolResult {
  */
 function zodToJsonSchema(schema) {
   const jsonSchema = { type: 'object', properties: {}, required: [] }
+  const def = schema._def || schema.def
+  const schemaType = def?.typeName || def?.type
 
-  if (schema._def.typeName === 'ZodObject') {
-    const shape = schema._def.shape()
+  if (schemaType === 'ZodObject' || schemaType === 'object') {
+    const shape =
+      typeof def.shape === 'function' ? def.shape() : def.shape
 
     for (const [key, value] of Object.entries(shape)) {
       const fieldSchema = zodFieldToJsonSchema(value)
@@ -127,48 +130,55 @@ function zodToJsonSchema(schema) {
 }
 
 function zodFieldToJsonSchema(field) {
-  const def = field._def
+  const def = field._def || field.def
+  const fieldType = def?.typeName || def?.type
 
   // Handle optional wrapper
-  if (def.typeName === 'ZodOptional') {
+  if (fieldType === 'ZodOptional' || fieldType === 'optional') {
     return zodFieldToJsonSchema(def.innerType)
   }
 
   // Handle nullable
-  if (def.typeName === 'ZodNullable') {
+  if (fieldType === 'ZodNullable' || fieldType === 'nullable') {
     return zodFieldToJsonSchema(def.innerType)
   }
 
   // Handle default
-  if (def.typeName === 'ZodDefault') {
+  if (fieldType === 'ZodDefault' || fieldType === 'default') {
     return zodFieldToJsonSchema(def.innerType)
   }
 
-  switch (def.typeName) {
+  switch (fieldType) {
     case 'ZodString':
+    case 'string':
       return { type: 'string', description: def.description }
 
     case 'ZodNumber':
+    case 'number':
       return { type: 'number', description: def.description }
 
     case 'ZodBoolean':
+    case 'boolean':
       return { type: 'boolean', description: def.description }
 
     case 'ZodArray':
+    case 'array':
       return {
         type: 'array',
-        items: zodFieldToJsonSchema(def.type),
+        items: zodFieldToJsonSchema(def.type || def.element),
         description: def.description,
       }
 
     case 'ZodEnum':
+    case 'enum':
       return {
         type: 'string',
-        enum: def.values,
+        enum: def.values || Object.values(def.entries),
         description: def.description,
       }
 
     case 'ZodObject':
+    case 'object':
       return zodToJsonSchema(field)
 
     default:

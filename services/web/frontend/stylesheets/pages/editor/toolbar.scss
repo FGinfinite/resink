@@ -1,44 +1,43 @@
 @import '../../abstracts/variables';
 
 :root {
-  --toolbar-border-color: var(--border-divider-dark);
-  --toolbar-header-bg-color: var(--bg-dark-primary);
-  --toolbar-header-btn-border-color: var(--border-divider-dark);
+  --toolbar-border-color: var(--neutral-80);
+  --toolbar-header-bg-color: var(--neutral-90);
+  --toolbar-header-btn-border-color: var(--neutral-80);
   --toolbar-btn-color: var(--white);
-  --toolbar-btn-hover-bg-color: var(--bg-dark-secondary);
+  --toolbar-btn-hover-bg-color: var(--neutral-80);
   --toolbar-btn-hover-color: var(--white);
   --toolbar-btn-active-color: var(--white);
   --toolbar-btn-active-bg-color: var(--green-50);
   --toolbar-height: #{$toolbar-height};
   --toolbar-small-height: #{$toolbar-small-height};
-  --toolbar-alt-bg-color: var(--bg-dark-secondary);
+  --toolbar-alt-bg-color: var(--neutral-80);
   --formatting-btn-color: var(--white);
-  --formatting-btn-bg: var(--bg-dark-secondary);
-  --formatting-btn-border: var(--bg-dark-tertiary);
+  --formatting-btn-bg: var(--neutral-80);
+  --formatting-btn-border: var(--neutral-70);
   --project-name-color: var(--neutral-40);
-  --toolbar-filetree-bg-color: var(--bg-dark-secondary);
+  --toolbar-filetree-bg-color: var(--neutral-80);
   --project-rename-link-color: var(--neutral-40);
   --project-rename-link-color-hover: var(--neutral-20);
   --editor-header-logo-background: url(../../../../public/img/ol-brand/overleaf-o-white.svg)
     center / contain no-repeat;
-  --editor-toolbar-bg: var(--bg-dark-secondary);
+  --editor-toolbar-bg: var(--neutral-80);
+  --editor-toolbar-popover-border-color: var(--border-primary);
   --toolbar-dropdown-divider-color: var(--border-dark-divider);
 }
 
 .ide-redesign-main {
   --toolbar-alt-bg-color: var(--bg-dark-secondary);
   --toolbar-btn-color: var(--content-primary-dark);
-  --toolbar-btn-hover-bg-color: var(--bg-dark-secondary);
+  --toolbar-btn-hover-bg-color: var(--neutral-80);
   --toolbar-btn-hover-color: var(--white);
   --editor-toolbar-bg: var(--bg-dark-primary);
-  --toolbar-filetree-bg-color: var(--bg-dark-secondary);
+  --toolbar-filetree-bg-color: var(--neutral-80);
 
   .ol-cm-toolbar-portal {
     display: flex;
     align-items: center;
     background-color: var(--editor-toolbar-bg);
-    border-bottom: 1px solid rgb(255 255 255 / 6%);
-    box-shadow: 0 1px 0 rgb(0 0 0 / 30%);
 
     .review-panel-header {
       align-self: flex-start;
@@ -74,6 +73,7 @@
   --editor-header-logo-background: url(../../../../public/img/ol-brand/overleaf-o.svg)
     center / contain no-repeat;
   --editor-toolbar-bg: var(--white);
+  --editor-toolbar-popover-border-color: rgba(125 125 125 / 20%);
   --toolbar-dropdown-divider-color: var(--border-divider);
 
   .ide-redesign-main {
@@ -83,11 +83,6 @@
     --toolbar-btn-hover-color: var(--white);
     --editor-toolbar-bg: var(--white);
     --toolbar-filetree-bg-color: var(--white);
-
-    .ol-cm-toolbar-portal {
-      border-bottom: none;
-      box-shadow: none;
-    }
   }
 }
 
@@ -300,6 +295,12 @@
   z-index: 10; // Prevent track changes showing over toolbar
 }
 
+// Isolate secondary toolbar rows so they paint below the main toolbar (z-index: 10)
+// and its dropdowns, which would otherwise be obscured due to DOM order.
+.ol-cm-toolbar-wrapper > .writefull {
+  isolation: isolate;
+}
+
 /**************************************
 	Toggle Switch
 ***************************************/
@@ -331,9 +332,9 @@
   color: var(--content-secondary-themed);
   border-radius: var(--border-radius-full);
   transition:
-    color var(--transition-fast) var(--ease-standard),
-    background-color var(--transition-fast) var(--ease-standard),
-    box-shadow var(--transition-fast) var(--ease-standard);
+    color 0.12s ease-out,
+    background-color 0.12s ease-out,
+    box-shadow 0.12s ease-out;
   overflow: hidden;
 
   span {
@@ -344,7 +345,7 @@
     padding: 0 var(--spacing-08);
     background-size: 200% 100%;
     background-position: 0 0;
-    transition: background-position var(--transition-fast) var(--ease-standard);
+    transition: background-position 0.12s ease-out;
     font-size: var(--font-size-02);
     font-weight: bold;
   }
@@ -380,13 +381,18 @@
   align-items: center;
   white-space: nowrap;
 
-  .toggle-switch {
-    margin-left: var(--spacing-03);
+  &::before {
+    content: '';
+    display: block;
+    width: 1px;
+    height: 16px;
+    background-color: var(--toolbar-dropdown-divider-color);
+    margin-right: var(--spacing-02);
   }
 
   .toggle-switch-label span {
     background: none;
-    transition: background var(--transition-fast) var(--ease-standard);
+    transition: background 0.12s ease-out;
   }
 
   .toggle-switch-label:first-of-type span {

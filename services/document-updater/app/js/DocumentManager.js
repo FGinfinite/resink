@@ -187,7 +187,6 @@ const DocumentManager = {
       type,
     } = await DocumentManager.getDoc(projectId, docId)
 
-    // CAS check: reject if version doesn't match
     if (expectedVersion !== undefined && version !== expectedVersion) {
       throw new Errors.VersionMismatchError(expectedVersion, version)
     }

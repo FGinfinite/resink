@@ -11,7 +11,15 @@ import StreamingPhaseIndicator from './streaming-phase-indicator'
 import { ToolCallItem } from './tool-call-list'
 import SkillToolbar from './skill-toolbar'
 import MaterialIcon from '@/shared/components/material-icon'
-import type { AIMessage, ContentBlock, StreamingPhase } from '../types/ai-types'
+import { useAIAssistantContext } from '../context/ai-assistant-context'
+import type {
+  AgentTeamEvent,
+  AgentTeamRun,
+  AgentTeamTask,
+  AIMessage,
+  ContentBlock,
+  StreamingPhase,
+} from '../types/ai-types'
 
 interface MessageListProps {
   messages: AIMessage[]
@@ -24,7 +32,6 @@ interface MessageListProps {
   streamingError?: Error | null
   onRetry?: () => void
   onSkillSelect?: (skillName: string) => void
-  sessionId?: string | null
 }
 
 function ContentBlockRenderer({
@@ -85,9 +92,9 @@ function MessageList({
   streamingError,
   onRetry,
   onSkillSelect,
-  sessionId,
 }: MessageListProps) {
   const { t } = useTranslation()
+  const { state, cancelTeamRun, retryTeamRunTask } = useAIAssistantContext()
   const containerRef = useRef<HTMLDivElement>(null)
   const isNearBottomRef = useRef(true)
   const prevMessageCountRef = useRef(messages.length)
@@ -135,7 +142,8 @@ function MessageList({
     }
   }, [activeBlocks, childActiveBlocks, streamingError])
 
-  const isEmpty = messages.length === 0 && !isStreaming && !streamingError
+  const hasTeamRuns = state.teamRuns.length > 0
+  const isEmpty = messages.length === 0 && !isStreaming && !streamingError && !hasTeamRuns
 
   if (isEmpty) {
     return <EmptyState onSkillSelect={onSkillSelect} />
@@ -143,7 +151,32 @@ function MessageList({
 
   return (
     <div className="ai-message-list" ref={containerRef} onScroll={handleScroll}>
+      {state.session?.activeHandoff && (
+        <div className="ai-active-handoff-banner">
+          <MaterialIcon type="published_with_changes" />
+          <span>
+            Active handoff · {state.session.activeHandoff.capabilityName || 'specialist agent'}
+          </span>
+        </div>
+      )}
       <ul className="ai-message-list-items">
+        {state.teamRuns.map(teamRun => (
+          <li
+            key={teamRun.team.id}
+            className="ai-message-item ai-message-item-assistant"
+          >
+            <div className="ai-message-avatar">
+              <MaterialIcon type="group_work" />
+            </div>
+            <div className="ai-message-body">
+              <TeamTraceBlock
+                teamRun={teamRun}
+                onCancel={cancelTeamRun}
+                onRetryTask={retryTeamRunTask}
+              />
+            </div>
+          </li>
+        ))}
         {messages.map(message =>
           message.isCompaction ? (
             <CompactionDivider
@@ -365,3 +398,181 @@ function EmptyState({ onSkillSelect }: { onSkillSelect?: (skillName: string) => 
 }
 
 export default memo(MessageList)
+
+function TeamTraceBlock({
+  teamRun,
+  onCancel,
+  onRetryTask,
+}: {
+  teamRun: AgentTeamRun
+  onCancel: (teamId: string) => Promise<void>
+  onRetryTask: (teamId: string, taskId: string) => Promise<void>
+}) {
+  const { t } = useTranslation()
+  const [expanded, setExpanded] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+  const team = teamRun.team
+  const running = team.status === 'queued' || team.status === 'running'
+  const tasks = teamRun.tasks || []
+  const events = teamRun.events || []
+  const results = teamRun.results || []
+  const completed = tasks.filter(task => task.status === 'completed').length
+  const failed = tasks.filter(task => ['failed', 'timeout', 'cancelled'].includes(task.status)).length
+  const findingCount = tasks.reduce((sum, task) => sum + (task.findingCount || 0), 0)
+  const artifactCount = tasks.reduce((sum, task) => sum + (task.artifactCount || 0), 0)
+  const draftCount = tasks.reduce((sum, task) => sum + (task.draftChangeCount || 0), 0)
+  const teamLabel = team.workflowType || team.mode || team.id
+
+  const runAction = async (key: string, action: () => Promise<void>) => {
+    setBusy(key)
+    try {
+      await action()
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className={`ai-team-trace-block ai-team-trace-${team.status}`}>
+      <button
+        type="button"
+        className="ai-tool-call-header ai-tool-call-header-clickable"
+        onClick={() => setExpanded(value => !value)}
+      >
+        <span className="ai-tool-call-icon">
+          <MaterialIcon type={running ? 'groups' : team.status === 'cancelled' ? 'stop_circle' : 'task_alt'} />
+        </span>
+        <span className="ai-tool-call-text">
+          Team {teamLabel} · {team.status}
+        </span>
+        <span className="ai-team-trace-metrics">
+          {completed}/{tasks.length} {t('completed', 'completed')}
+          {failed ? ` · ${failed} ${t('failed', 'failed')}` : ''}
+          {findingCount ? ` · ${findingCount} findings` : ''}
+          {artifactCount ? ` · ${artifactCount} artifacts` : ''}
+          {draftCount ? ` · ${draftCount} drafts` : ''}
+        </span>
+        <span className="ai-tool-call-expand-icon">
+          <MaterialIcon type={expanded ? 'expand_less' : 'expand_more'} />
+        </span>
+      </button>
+      {expanded && (
+        <div className="ai-team-trace-detail">
+          <div className="ai-team-trace-meta">
+            <span>{t('status', 'Status')}: {team.status}</span>
+            <span>{t('mode', 'Mode')}: {team.mode || 'default'}</span>
+            {results.length > 0 && (
+              <span>
+                {t('results', 'Results')}: {results.length}
+              </span>
+            )}
+            {teamRun.diagnostics?.eventTypes && (
+              <span>
+                {t('events', 'Events')}: {Object.values(teamRun.diagnostics.eventTypes).reduce((sum, count) => sum + count, 0)}
+              </span>
+            )}
+            {running && (
+              <button
+                type="button"
+                className="ai-retry-button"
+                disabled={busy === 'cancel'}
+                onClick={() => runAction('cancel', () => onCancel(team.id))}
+              >
+                <MaterialIcon type="stop_circle" />
+                {t('cancel_team', 'Cancel team')}
+              </button>
+            )}
+          </div>
+          <div className="ai-team-task-list">
+            {tasks.map(task => (
+              <TeamTaskRow
+                key={task.id}
+                task={task}
+                busy={busy === task.id}
+                onRetry={() => runAction(task.id, () => onRetryTask(team.id, task.id))}
+              />
+            ))}
+          </div>
+          {events.length > 0 && (
+            <div className="ai-team-event-list">
+              {events.map(event => (
+                <TeamEventRow event={event} key={event.id} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TeamEventRow({ event }: { event: AgentTeamEvent }) {
+  const details = [
+    event.payload?.capabilityName,
+    event.payload?.tool,
+    event.payload?.reason,
+    event.payload?.conflictType,
+  ]
+    .filter(value => value !== undefined && value !== null && value !== '')
+    .map(value => String(value))
+
+  return (
+    <div className="ai-team-event-row">
+      <MaterialIcon type="radio_button_checked" />
+      <span>{event.type}</span>
+      {details.map(detail => (
+        <span key={detail}>{detail}</span>
+      ))}
+    </div>
+  )
+}
+
+function TeamTaskRow({
+  task,
+  busy,
+  onRetry,
+}: {
+  task: AgentTeamTask
+  busy: boolean
+  onRetry: () => Promise<void>
+}) {
+  const { t } = useTranslation()
+  const icon =
+    task.status === 'completed'
+      ? 'task_alt'
+      : task.status === 'running'
+        ? 'autorenew'
+        : ['failed', 'timeout'].includes(task.status)
+          ? 'error_outline'
+          : task.status === 'cancelled'
+            ? 'stop_circle'
+            : 'schedule'
+
+  return (
+    <div className={`ai-team-task-row ai-team-task-${task.status}`}>
+      <MaterialIcon type={icon} />
+      <div className="ai-team-task-main">
+        <div className="ai-team-task-title">
+          {task.agentName}: {task.objective}
+        </div>
+        <div className="ai-team-task-meta">
+          {task.status}
+          {task.findingCount ? ` · ${task.findingCount} findings` : ''}
+          {task.draftChangeCount ? ` · ${task.draftChangeCount} drafts` : ''}
+          {task.error ? ` · ${task.error}` : ''}
+        </div>
+      </div>
+      {task.retryable && (
+        <button
+          type="button"
+          className="ai-retry-button ai-team-task-retry"
+          disabled={busy}
+          onClick={onRetry}
+        >
+          <MaterialIcon type="refresh" />
+          {t('queue_retry', 'Queue retry')}
+        </button>
+      )}
+    </div>
+  )
+}

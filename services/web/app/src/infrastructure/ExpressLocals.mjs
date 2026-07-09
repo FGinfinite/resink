@@ -168,7 +168,7 @@ export default async function (webRouter, privateApiRouter, publicApiRouter) {
       return chunks.map(chunk => staticFilesBase + chunk)
     }
 
-    res.locals.mathJaxPath = `/js/libs/mathjax-${PackageVersions.version.mathjax}/es5/tex-svg-full.js`
+    res.locals.mathJaxPath = `/js/libs/mathjax-${PackageVersions.version.mathjax}/tex-svg.js`
     res.locals.dictionariesRoot = `/js/dictionaries/${PackageVersions.version.dictionaries}/`
 
     res.locals.lib = PackageVersions.lib
@@ -418,6 +418,8 @@ export default async function (webRouter, privateApiRouter, publicApiRouter) {
       cioSiteId: Settings.analytics?.cio?.siteId,
       linkedInInsightsPartnerId: Settings.analytics?.linkedIn?.partnerId,
       enablePandocConversions: Settings.enablePandocConversions,
+      mixpanelLabsToken:
+        Settings.labs?.enable && Settings.analytics?.mixpanel?.labsToken,
     }
     next()
   })

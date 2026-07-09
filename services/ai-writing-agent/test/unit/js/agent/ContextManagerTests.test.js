@@ -61,9 +61,20 @@ const { ContextManager } = await import(
 
 describe('ContextManager', () => {
   let cm
+  let sessionSummaryService
+  let memorySuggestionService
 
   beforeEach(() => {
-    cm = new ContextManager()
+    sessionSummaryService = {
+      createSummary: vi.fn().mockResolvedValue({ _id: 'summary-1' }),
+    }
+    memorySuggestionService = {
+      createSuggestion: vi.fn().mockResolvedValue({ _id: 'suggestion-1' }),
+    }
+    cm = new ContextManager({
+      sessionSummaryService,
+      memorySuggestionService,
+    })
     mockFindOne.mockReset()
     mockUpdateOne.mockReset()
     mockFind.mockReset()
@@ -425,10 +436,16 @@ describe('ContextManager', () => {
   })
 
   describe('compactHistory', () => {
-    function setupCompactMocks(messageCount, historyMessages) {
+    function setupCompactMocks(messageCount, historyMessages, sessionFields = {}) {
       mockCountDocuments.mockResolvedValue(messageCount)
       // Mock getConversationHistory path: session with _nextSeq
-      mockFindOne.mockResolvedValue({ _nextSeq: messageCount + 1, _latestSummarySeq: null })
+      mockFindOne.mockResolvedValue({
+        _nextSeq: messageCount + 1,
+        _latestSummarySeq: null,
+        projectId: 'project-1',
+        userId: 'user-1',
+        ...sessionFields,
+      })
       mockFind.mockReturnValue({
         sort: () => ({
           toArray: () => Promise.resolve(historyMessages),
@@ -459,7 +476,8 @@ describe('ContextManager', () => {
       const result = await cm.compactHistory('test-session', mockLLM, config)
 
       expect(result.success).toBe(true)
-      expect(result.summary).toBe('Summary: user worked on main.tex')
+      expect(result.summary).toContain('Summary: user worked on main.tex')
+      expect(result.summary).toContain('<conversation_summary>')
       expect(result.usage).toEqual(mockUsage)
       expect(mockLLM.chat).toHaveBeenCalledOnce()
 
@@ -474,6 +492,65 @@ describe('ContextManager', () => {
 
       // Verify old toolContext was cleaned up
       expect(mockUpdateMany).toHaveBeenCalledOnce()
+
+      expect(sessionSummaryService.createSummary).toHaveBeenCalledWith({
+        sessionId: 'test-session',
+        projectId: 'project-1',
+        userId: 'user-1',
+        summary: expect.stringContaining('<conversation_summary>'),
+        sourceMessageRange: { fromSeq: 1, toSeq: 6 },
+        tokenEstimate: expect.any(Number),
+      })
+    })
+
+    it('creates pending memory suggestions from compaction without writing memories', async () => {
+      setupCompactMocks(4, [
+        { seq: 1, role: 'user', content: 'Please remember that I prefer short Chinese progress updates.' },
+        { seq: 2, role: 'assistant', content: 'Understood.' },
+        { seq: 3, role: 'user', content: 'This is a durable project convention.' },
+        { seq: 4, role: 'assistant', content: 'Noted.' },
+      ])
+
+      const mockLLM = {
+        chat: vi.fn().mockResolvedValue({
+          content: 'Summary: user prefers short Chinese progress updates.',
+          usage: { completion_tokens: 20 },
+        }),
+      }
+
+      const result = await cm.compactHistory('test-session', mockLLM, {}, {
+        proposeMemorySuggestions: true,
+      })
+
+      expect(result.success).toBe(true)
+      expect(memorySuggestionService.createSuggestion).toHaveBeenCalledWith({
+        userId: 'user-1',
+        projectId: 'project-1',
+        sessionId: 'test-session',
+        messageId: null,
+        proposedContent: expect.stringContaining('prefers short Chinese progress updates'),
+        scope: 'project',
+        reason: 'compaction-summary preference candidate',
+      })
+    })
+
+    it('does not create memory suggestions unless explicitly enabled', async () => {
+      setupCompactMocks(4, [
+        { seq: 1, role: 'user', content: 'Remember my preference.' },
+        { seq: 2, role: 'assistant', content: 'Ok.' },
+        { seq: 3, role: 'user', content: 'Continue.' },
+        { seq: 4, role: 'assistant', content: 'Done.' },
+      ])
+      const mockLLM = {
+        chat: vi.fn().mockResolvedValue({
+          content: 'Summary: user preference exists.',
+          usage: null,
+        }),
+      }
+
+      await cm.compactHistory('test-session', mockLLM, {})
+
+      expect(memorySuggestionService.createSuggestion).not.toHaveBeenCalled()
     })
 
     it('returns false when message count is too low', async () => {

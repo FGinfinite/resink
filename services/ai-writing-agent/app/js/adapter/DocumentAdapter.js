@@ -11,7 +11,7 @@ const MAX_CONTENT_CACHE_SIZE = settings.document?.contentCacheSize || 50
 function _authHeaders() {
   const headers = { 'Content-Type': 'application/json' }
   if (DOC_UPDATER_SECRET) {
-    headers['Authorization'] = `Bearer ${DOC_UPDATER_SECRET}`
+    headers.Authorization = `Bearer ${DOC_UPDATER_SECRET}`
   }
   return headers
 }
@@ -322,6 +322,21 @@ export class DocumentAdapter {
       )
     }
 
+    const liveConflict = this._detectLiveConflict(change, currentDoc)
+    if (liveConflict) {
+      throw new RebaseConflictError(
+        'Cannot apply edit: LIVE_CONTENT_CHANGED',
+        {
+          changeId: change.id,
+          conflictType: 'LIVE_CONTENT_CHANGED',
+          detail: liveConflict.detail,
+          baseVersion,
+          currentVersion: currentDoc.version,
+          liveBaseVersion: liveConflict.liveBaseVersion,
+        }
+      )
+    }
+
     // Resolve position against current document content
     const resolution = this._resolveChangePosition(change, currentDoc)
 
@@ -548,6 +563,27 @@ export class DocumentAdapter {
     return this._disambiguateByPosition(change, content, version)
   }
 
+  _detectLiveConflict(change, currentDoc) {
+    const liveBase = change.liveConflictBase
+    if (!liveBase?.oldSha256) {
+      return null
+    }
+
+    const liveBaseVersion = liveBase.baseVersion ?? change.baseVersion
+    if (currentDoc.version <= liveBaseVersion) {
+      return null
+    }
+
+    if (this._sha256(currentDoc.content) === liveBase.oldSha256) {
+      return null
+    }
+
+    return {
+      liveBaseVersion,
+      detail: 'Canonical document changed after workspace sync; review the pending change before applying.',
+    }
+  }
+
   /**
    * When oldText appears multiple times in the current document,
    * use the original position as a hint to pick the correct occurrence.
@@ -688,12 +724,20 @@ export class DocumentAdapter {
    * @returns {string} - Hex hash string
    */
   _hashContext(before, after) {
-    return crypto.createHash('sha256')
-      .update(before)
-      .update('\0')
-      .update(after)
-      .digest('hex')
+    return this._sha256Chunks(before, '\0', after)
       .slice(0, 16)  // 16 hex chars = 64 bits, sufficient for change detection
+  }
+
+  _sha256(value) {
+    return this._sha256Chunks(value)
+  }
+
+  _sha256Chunks(...values) {
+    const hash = crypto.createHash('sha256')
+    for (const value of values) {
+      hash.update(value)
+    }
+    return hash.digest('hex')
   }
 }
 

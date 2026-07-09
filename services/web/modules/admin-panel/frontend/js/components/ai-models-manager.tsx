@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useId } from 'react'
 import OLButton from '@/shared/components/ol/ol-button'
 import OLSpinner from '@/shared/components/ol/ol-spinner'
 import OLNotification from '@/shared/components/ol/ol-notification'
@@ -98,6 +98,7 @@ interface ConfigFormProps {
 
 function ConfigFormModal({ config, onSave, onClose }: ConfigFormProps) {
   const isEdit = !!config?._id
+  const formId = useId()
   const [form, setForm] = useState({
     displayName: config?.displayName || '',
     model: config?.model || '',
@@ -162,10 +163,13 @@ function ConfigFormModal({ config, onSave, onClose }: ConfigFormProps) {
     label: string,
     key: 'maxTokens' | 'temperature' | 'timeout' | 'retryAttempts' | 'retryDelay' | 'maxRetryTimeMs' | 'maxCompletionTokens' | 'maxToolCallTemperature',
     opts?: { step?: string; min?: string; helpText?: string; placeholder?: string }
-  ) => (
+  ) => {
+    const inputId = `${formId}-${key}`
+    return (
     <div className="form-group" style={{ marginBottom: '12px' }}>
-      <label>{label}</label>
+      <label htmlFor={inputId}>{label}</label>
       <input
+        id={inputId}
         className="form-control"
         type="number"
         step={opts?.step || '1'}
@@ -181,16 +185,32 @@ function ConfigFormModal({ config, onSave, onClose }: ConfigFormProps) {
       )}
     </div>
   )
+  }
 
   return (
-    <div style={modalOverlayStyle} onClick={onClose}>
-      <div style={modalContentStyle} onClick={e => e.stopPropagation()}>
-        <h4>{isEdit ? 'Edit Model Config' : 'New Model Config'}</h4>
+    <div
+      style={modalOverlayStyle}
+      onClick={e => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+      onKeyDown={e => {
+        if (e.key === 'Escape') onClose()
+      }}
+      role="presentation"
+    >
+      <div
+        style={modalContentStyle}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`${formId}-title`}
+      >
+        <h4 id={`${formId}-title`}>{isEdit ? 'Edit Model Config' : 'New Model Config'}</h4>
         <form onSubmit={handleSubmit}>
           {/* ── Basic ── */}
           <div className="form-group" style={{ marginBottom: '12px' }}>
-            <label>Display Name *</label>
+            <label htmlFor={`${formId}-display-name`}>Display Name *</label>
             <input
+              id={`${formId}-display-name`}
               className="form-control"
               required
               value={form.displayName}
@@ -200,8 +220,9 @@ function ConfigFormModal({ config, onSave, onClose }: ConfigFormProps) {
             />
           </div>
           <div className="form-group" style={{ marginBottom: '12px' }}>
-            <label>Model *</label>
+            <label htmlFor={`${formId}-model`}>Model *</label>
             <input
+              id={`${formId}-model`}
               className="form-control"
               required
               value={form.model}
@@ -209,8 +230,9 @@ function ConfigFormModal({ config, onSave, onClose }: ConfigFormProps) {
             />
           </div>
           <div className="form-group" style={{ marginBottom: '12px' }}>
-            <label>API Base *</label>
+            <label htmlFor={`${formId}-api-base`}>API Base *</label>
             <input
+              id={`${formId}-api-base`}
               className="form-control"
               required
               value={form.apiBase}
@@ -218,8 +240,11 @@ function ConfigFormModal({ config, onSave, onClose }: ConfigFormProps) {
             />
           </div>
           <div className="form-group" style={{ marginBottom: '12px' }}>
-            <label>API Key {isEdit ? '(leave blank to keep current)' : '*'}</label>
+            <label htmlFor={`${formId}-api-key`}>
+              API Key {isEdit ? '(leave blank to keep current)' : '*'}
+            </label>
             <input
+              id={`${formId}-api-key`}
               className="form-control"
               type="password"
               required={!isEdit}
@@ -228,8 +253,9 @@ function ConfigFormModal({ config, onSave, onClose }: ConfigFormProps) {
             />
           </div>
           <div className="form-group" style={{ marginBottom: '12px' }}>
-            <label>Proxy</label>
+            <label htmlFor={`${formId}-proxy`}>Proxy</label>
             <input
+              id={`${formId}-proxy`}
               className="form-control"
               placeholder="socks5://host:port or http://host:port"
               value={form.proxy}
@@ -266,8 +292,9 @@ function ConfigFormModal({ config, onSave, onClose }: ConfigFormProps) {
             Advanced
           </h5>
           <div className="form-group" style={{ marginBottom: '12px' }}>
-            <label>Extra Body (JSON)</label>
+            <label htmlFor={`${formId}-extra-body`}>Extra Body (JSON)</label>
             <textarea
+              id={`${formId}-extra-body`}
               className="form-control"
               rows={3}
               placeholder='{"disable_reasoning": true}'
@@ -329,6 +356,7 @@ interface SlotFormProps {
 
 function SlotFormModal({ slot, configs, onSave, onClose }: SlotFormProps) {
   const isEdit = !!slot?._id
+  const formId = useId()
   const [form, setForm] = useState({
     slug: slot?.slug || '',
     label: slot?.label || '',
@@ -344,13 +372,28 @@ function SlotFormModal({ slot, configs, onSave, onClose }: SlotFormProps) {
   }
 
   return (
-    <div style={modalOverlayStyle} onClick={onClose}>
-      <div style={modalContentStyle} onClick={e => e.stopPropagation()}>
-        <h4>{isEdit ? 'Edit Model Slot' : 'New Model Slot'}</h4>
+    <div
+      style={modalOverlayStyle}
+      onClick={e => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+      onKeyDown={e => {
+        if (e.key === 'Escape') onClose()
+      }}
+      role="presentation"
+    >
+      <div
+        style={modalContentStyle}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`${formId}-title`}
+      >
+        <h4 id={`${formId}-title`}>{isEdit ? 'Edit Model Slot' : 'New Model Slot'}</h4>
         <form onSubmit={handleSubmit}>
           <div className="form-group" style={{ marginBottom: '12px' }}>
-            <label>Slug *</label>
+            <label htmlFor={`${formId}-slug`}>Slug *</label>
             <input
+              id={`${formId}-slug`}
               className="form-control"
               required
               disabled={isEdit}
@@ -359,8 +402,9 @@ function SlotFormModal({ slot, configs, onSave, onClose }: SlotFormProps) {
             />
           </div>
           <div className="form-group" style={{ marginBottom: '12px' }}>
-            <label>Label *</label>
+            <label htmlFor={`${formId}-label`}>Label *</label>
             <input
+              id={`${formId}-label`}
               className="form-control"
               required
               value={form.label}
@@ -368,8 +412,9 @@ function SlotFormModal({ slot, configs, onSave, onClose }: SlotFormProps) {
             />
           </div>
           <div className="form-group" style={{ marginBottom: '12px' }}>
-            <label>Model Config *</label>
+            <label htmlFor={`${formId}-model-config`}>Model Config *</label>
             <select
+              id={`${formId}-model-config`}
               className="form-control"
               required
               value={form.modelConfigId}
@@ -388,16 +433,18 @@ function SlotFormModal({ slot, configs, onSave, onClose }: SlotFormProps) {
             </select>
           </div>
           <div className="form-group" style={{ marginBottom: '12px' }}>
-            <label>Icon</label>
+            <label htmlFor={`${formId}-icon`}>Icon</label>
             <input
+              id={`${formId}-icon`}
               className="form-control"
               value={form.icon}
               onChange={e => setForm(f => ({ ...f, icon: e.target.value }))}
             />
           </div>
           <div className="form-group" style={{ marginBottom: '12px' }}>
-            <label>Sort Order</label>
+            <label htmlFor={`${formId}-sort-order`}>Sort Order</label>
             <input
+              id={`${formId}-sort-order`}
               className="form-control"
               type="number"
               value={form.sortOrder}
@@ -574,37 +621,37 @@ export default function AIModelsManager() {
           {/* Tab Navigation */}
           <ul className="nav nav-tabs" style={{ marginBottom: '20px' }}>
             <li className={activeTab === 'configs' ? 'active' : ''}>
-              <a
-                href="#"
-                onClick={e => {
-                  e.preventDefault()
+              <button
+                type="button"
+                className="btn btn-link"
+                onClick={() => {
                   setActiveTab('configs')
                 }}
               >
                 Model Configs
-              </a>
+              </button>
             </li>
             <li className={activeTab === 'slots' ? 'active' : ''}>
-              <a
-                href="#"
-                onClick={e => {
-                  e.preventDefault()
+              <button
+                type="button"
+                className="btn btn-link"
+                onClick={() => {
                   setActiveTab('slots')
                 }}
               >
                 Model Slots
-              </a>
+              </button>
             </li>
             <li className={activeTab === 'system' ? 'active' : ''}>
-              <a
-                href="#"
-                onClick={e => {
-                  e.preventDefault()
+              <button
+                type="button"
+                className="btn btn-link"
+                onClick={() => {
                   setActiveTab('system')
                 }}
               >
                 System Settings
-              </a>
+              </button>
             </li>
           </ul>
 
@@ -877,6 +924,7 @@ function SystemTab({
   slots: ModelSlot[]
   onSave: (data: SystemConfig) => void
 }) {
+  const formId = useId()
   const [defaultSlot, setDefaultSlot] = useState(systemCfg.defaultSlot || '')
   const [quickEdit, setQuickEdit] = useState(
     systemCfg.featureBindings?.quickEdit || ''
@@ -912,11 +960,13 @@ function SystemTab({
   const slotSelect = (
     label: string,
     value: string,
-    onChange: (v: string) => void
+    onChange: (v: string) => void,
+    idSuffix: string
   ) => (
     <div className="form-group" style={{ marginBottom: '12px' }}>
-      <label>{label}</label>
+      <label htmlFor={`${formId}-${idSuffix}`}>{label}</label>
       <select
+        id={`${formId}-${idSuffix}`}
         className="form-control"
         value={value}
         onChange={e => onChange(e.target.value)}
@@ -933,13 +983,13 @@ function SystemTab({
 
   return (
     <form onSubmit={handleSubmit} style={{ maxWidth: '600px' }}>
-      {slotSelect('Default Slot', defaultSlot, setDefaultSlot)}
+      {slotSelect('Default Slot', defaultSlot, setDefaultSlot, 'default-slot')}
       <h4 style={{ marginTop: '24px', marginBottom: '12px' }}>
         Feature Bindings
       </h4>
-      {slotSelect('Quick Edit', quickEdit, setQuickEdit)}
-      {slotSelect('Autocomplete', autocomplete, setAutocomplete)}
-      {slotSelect('Digest Model', digestModel, setDigestModel)}
+      {slotSelect('Quick Edit', quickEdit, setQuickEdit, 'quick-edit')}
+      {slotSelect('Autocomplete', autocomplete, setAutocomplete, 'autocomplete')}
+      {slotSelect('Digest Model', digestModel, setDigestModel, 'digest-model')}
       <div style={{ marginTop: '16px' }}>
         <OLButton variant="primary" type="submit">
           Save System Settings

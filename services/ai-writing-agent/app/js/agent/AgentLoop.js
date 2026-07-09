@@ -4,7 +4,8 @@ import OError from '@overleaf/o-error'
 import { db, ObjectId } from '../mongodb.js'
 import { buildSystemPrompt } from '../prompt/system.js'
 import { extractOutline, extractFileReferences } from '../util/outline.js'
-import { getMemoryManager } from '../memory/MemoryManager.js'
+import { AgentContextBuilder } from '../agent-context/AgentContextBuilder.js'
+import { getAgentRuntimeConfig } from '../RuntimeConfigManager.js'
 
 export class AgentError extends OError {}
 export class AgentMaxTurnsError extends AgentError {}
@@ -120,6 +121,7 @@ export class AgentLoop {
     this.toolRegistry = options.toolRegistry
     this.contextManager = options.contextManager
     this.adapters = options.adapters
+    this.disablePersistence = options.disablePersistence || options.adapters?.disablePersistence || false
 
     // Current document context
     this.currentDocId = options.currentDocId || null
@@ -127,6 +129,13 @@ export class AgentLoop {
 
     // User identity
     this.userId = options.userId || null
+    this.profile = options.profile || null
+    this.agentName = options.agentName || null
+    this.model = options.model || null
+    this.agentTeam = options.agentTeam || null
+    this._baseContext = options.baseContext || {}
+    this.agentContextBuilder =
+      options.agentContextBuilder || new AgentContextBuilder()
 
     // Synchronous confirmation channel (optional — null for review loops)
     this.confirmationChannel = options.confirmationChannel || null
@@ -169,9 +178,11 @@ export class AgentLoop {
     // automatically, propagating cancellation to arbitrary nesting depth.
     this._stopController = new AbortController()
     this._llmAbortController = null
+    this._workspaceDirty = false
+    this._lastWorkspaceSyncChangeCount = 0
 
     // Link to parent stop signal — enables cascading cancellation
-    // through arbitrarily nested delegate_task calls
+    // through arbitrarily nested team runtime calls.
     this._parentStopSignal = options.stopSignal || null
     this._parentStopHandler = null
     if (this._parentStopSignal) {
@@ -229,13 +240,15 @@ export class AgentLoop {
   async *run(userMessage, context = {}) {
     const sessionState = {
       readDocuments: context._initialReadDocuments || new Map(),
+      persistentWorkspace: context._persistentWorkspace,
+      turnId: context._turnId || `turn-${Date.now()}`,
       turns: 0,
       toolCalls: 0,
     }
     const changeHistory = []
 
     this._baseContext = { ...context }
-    const enrichedContext = await this._enrichContext(context)
+    const enrichedContext = await this._enrichContext(context, sessionState)
 
     // Pre-execute read_document for selection references so sessionState.readDocuments is populated
     const syntheticReadMessages = await this._executeSelectionReads(context, sessionState)
@@ -270,13 +283,15 @@ export class AgentLoop {
   async *resume(context = {}) {
     const sessionState = {
       readDocuments: context._initialReadDocuments || new Map(),
+      persistentWorkspace: context._persistentWorkspace,
+      turnId: context._turnId || `resume-${Date.now()}`,
       turns: 0,
       toolCalls: 0,
     }
     const changeHistory = []
 
     this._baseContext = { ...context }
-    const enrichedContext = await this._enrichContext(context)
+    const enrichedContext = await this._enrichContext(context, sessionState)
 
     const messages = await this.contextManager.buildMessagesForResume(
       this.sessionId,
@@ -310,7 +325,9 @@ export class AgentLoop {
     const accumulatedUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
 
     // In-memory message count for compaction check (avoids per-turn countDocuments)
-    let inMemoryMsgCount = await db.aiMessages.countDocuments({ sessionId: new ObjectId(this.sessionId) })
+    let inMemoryMsgCount = this.disablePersistence
+      ? messages.length
+      : await db.aiMessages.countDocuments({ sessionId: new ObjectId(this.sessionId) })
 
     try {
     while (true) {
@@ -499,9 +516,11 @@ export class AgentLoop {
               role: 'assistant',
               content: assistantContent || null,
             })
+            yield* this._syncDirtyWorkspaceIfNeeded(sessionState)
             yield {
               type: 'done',
               content: assistantContent || '',
+              finishReason,
               changeHistory,
               readDocuments: sessionState.readDocuments,
               usage: accumulatedUsage,
@@ -521,9 +540,11 @@ export class AgentLoop {
             'No tool calls and unexpected finish_reason'
           )
           if (assistantContent) {
-            yield {
-              type: 'done',
-              content: assistantContent,
+              yield* this._syncDirtyWorkspaceIfNeeded(sessionState)
+              yield {
+                type: 'done',
+                content: assistantContent,
+              finishReason,
               changeHistory,
               readDocuments: sessionState.readDocuments,
               usage: accumulatedUsage,
@@ -536,9 +557,11 @@ export class AgentLoop {
               } : undefined,
             }
           } else {
-            yield {
-              type: 'done',
-              content: '',
+              yield* this._syncDirtyWorkspaceIfNeeded(sessionState)
+              yield {
+                type: 'done',
+                content: '',
+              finishReason,
               changeHistory,
               readDocuments: sessionState.readDocuments,
               usage: accumulatedUsage,
@@ -633,10 +656,12 @@ export class AgentLoop {
               // If refresh fails, fall back to the existing system prompt.
               let systemPromptMsg = messages[0]
               try {
-                await db.aiSessions.updateOne(
-                  { _id: new ObjectId(this.sessionId) },
-                  { $unset: { promptSnapshot: '' } }
-                )
+                if (!this.disablePersistence) {
+                  await db.aiSessions.updateOne(
+                    { _id: new ObjectId(this.sessionId) },
+                    { $unset: { promptSnapshot: '' } }
+                  )
+                }
                 const refreshedContext = await this._enrichContext(this._baseContext)
                 const newSystemPrompt = await buildSystemPrompt(refreshedContext)
                 systemPromptMsg = { role: 'system', content: newSystemPrompt }
@@ -925,17 +950,30 @@ export class AgentLoop {
               currentDocId: this.currentDocId,
               currentDocPath: this.currentDocPath,
               userId: this.userId,
+              toolCallId: toolCall.id,
+              profile: this.profile || this._baseContext?.profile,
+              agentName: this.agentName || this._baseContext?.agentName,
+              model: this.model || this._baseContext?.model,
+              autoAccept: Boolean(this._baseContext?.autoAccept),
+              fileGlobs: this._baseContext?.fileGlobs,
+              writeGlobs: this._baseContext?.writeGlobs,
+              agentTeamPolicy: this._baseContext?.agentTeamPolicy,
               sessionState,
               adapters: this.adapters,
-              // Extra context for streaming tools (delegate_task)
+              persistentWorkspace: sessionState.persistentWorkspace,
+              workspaceManager: this.adapters.workspaceManager,
+              agentMessageStore: this.adapters.agentMessageStore,
+              allowedToolNames: this.toolRegistry.getNames(),
+              // Extra context for streaming tools and team runtime tools.
               confirmationChannel: this.confirmationChannel,
               rootSessionId: this.rootSessionId || this.sessionId,
               stopSignal: this._stopController.signal,
               // Per-tool abort signal for timeout enforcement
               toolAbortSignal: toolAbortController.signal,
-              // RunBudget and depth for delegate_task
+              // Shared budget and depth for nested agent/team runtime tools.
               runBudget: this.runBudget,
               currentDepth: this.depth,
+              agentTeam: this.agentTeam,
             }
 
             try {
@@ -1000,12 +1038,6 @@ export class AgentLoop {
                   // Convention: the final yield from a streaming tool is the ToolResult
                   finalResult = subEvent
                 } else {
-                  // Yield sub-events (child session tool_call, tool_result, etc.)
-                  // Tag child_session_init with the owning toolCallId so
-                  // AgentController can persist the link in contentBlocks.
-                  if (subEvent.type === 'child_session_init') {
-                    subEvent.toolCallId = toolCall.id
-                  }
                   yield subEvent
                 }
               }
@@ -1031,6 +1063,23 @@ export class AgentLoop {
               }
             }
 
+            this._trackWorkspaceWrite(toolName, result)
+            for (const event of result.data?.events || []) {
+              if (event.type === 'draft_change.created') {
+                const pendingDraftChange = event.change || event.draftChange
+                if (pendingDraftChange?.id) {
+                  sessionState.pendingDraftChanges = sessionState.pendingDraftChanges || []
+                  sessionState.pendingDraftChanges.push(pendingDraftChange)
+                }
+              }
+              if (event.type === 'skill.activated' && event.skillName) {
+                sessionState.activatedSkills = sessionState.activatedSkills || []
+                if (!sessionState.activatedSkills.includes(event.skillName)) {
+                  sessionState.activatedSkills.push(event.skillName)
+                }
+              }
+              yield event
+            }
             logger.debug(
               {
                 sessionId: this.sessionId,
@@ -1092,12 +1141,15 @@ export class AgentLoop {
   async *_executeBatchToolCalls(toolCallsInTurn, sessionState, changeHistory, messages) {
     // Phase 0: Pre-announce tool calls so the frontend (and AgentController's
     // streaming-context counter) knows the full set of tools in this turn upfront.
-    // When a streaming tool (delegate_task) is present and there are multiple
-    // tools, we pre-announce ALL tools — not just delegate_tasks — because
+    // When a streaming tool is present and there are multiple tools, we
+    // pre-announce ALL tools because
     // tool_results are now emitted immediately in Phase 1, and the
     // AgentController flush check (toolResults.length === toolCalls.length)
     // would otherwise trigger prematurely.
-    const hasStreamingTool = toolCallsInTurn.some(tc => tc.function.name === 'delegate_task')
+    const hasStreamingTool = toolCallsInTurn.some(tc => {
+      const tool = this.toolRegistry.get(tc.function.name)
+      return tool?.streaming === true
+    })
     const preAnnouncedIds = new Set()
 
     if (hasStreamingTool && toolCallsInTurn.length >= 2) {
@@ -1111,7 +1163,7 @@ export class AgentLoop {
     const executions = []
     for (const tc of toolCallsInTurn) {
       // Skip remaining tools if stop was requested (avoids unnecessary
-      // child session creation and LLM calls for delegate_task)
+      // child session creation and LLM calls for team runtime tools)
       if (this.stopRequested) {
         executions.push({
           tc,
@@ -1124,8 +1176,7 @@ export class AgentLoop {
       const skipAnnounce = preAnnouncedIds.has(tc.id)
       const { result, pendingChange } = yield* this._executeToolCore(tc, sessionState, { skipAnnounce })
 
-      // For pre-announced tools without pending changes (streaming tools like
-      // delegate_task in multi-tool turns), emit tool_result immediately so the
+      // For pre-announced tools without pending changes, emit tool_result immediately so the
       // frontend sees the status update without waiting for all sibling tools
       // to finish. Only do this when pre-announced — otherwise the
       // AgentController's streaming-context flush check would trigger
@@ -1292,6 +1343,90 @@ export class AgentLoop {
     }
   }
 
+  _trackWorkspaceWrite(toolName, result) {
+    if (!result?.success) return
+    if (toolName === 'sync_workspace_changes') {
+      this._workspaceDirty = false
+      this._lastWorkspaceSyncChangeCount = Number(result.data?.changeCount) || 0
+      return
+    }
+    if (
+      (toolName === 'edit_document' &&
+        result.data?.workspaceEdit &&
+        !result.data?.workspaceEditApplied &&
+        !result.data?.workspaceEditFinalized) ||
+      (toolName === 'delete_file' && result.data?.workspaceDelete)
+    ) {
+      this._workspaceDirty = true
+    }
+  }
+
+  async *_syncDirtyWorkspaceIfNeeded(sessionState) {
+    if (!this._workspaceDirty) return
+    const syncTool = this.toolRegistry.get('sync_workspace_changes')
+    const workspace = sessionState.persistentWorkspace?.workspace
+    const manager = this.adapters.workspaceManager
+    if (!syncTool || !workspace || !manager) return
+
+    const toolCallId = `auto_sync_workspace_${Date.now()}`
+    yield {
+      type: 'tool_call',
+      toolCall: {
+        id: toolCallId,
+        type: 'function',
+        function: {
+          name: 'sync_workspace_changes',
+          arguments: JSON.stringify({ fail_on_drift: true }),
+        },
+      },
+    }
+
+    const context = {
+      sessionId: this.sessionId,
+      projectId: this.projectId,
+      currentDocId: this.currentDocId,
+      currentDocPath: this.currentDocPath,
+      userId: this.userId,
+      sessionState,
+      adapters: this.adapters,
+      persistentWorkspace: sessionState.persistentWorkspace,
+      workspaceManager: manager,
+      agentMessageStore: this.adapters.agentMessageStore,
+      allowedToolNames: this.toolRegistry.getNames(),
+      rootSessionId: this.rootSessionId || this.sessionId,
+      stopSignal: this._stopController.signal,
+      runBudget: this.runBudget,
+      currentDepth: this.depth,
+    }
+    const result = await syncTool.execute({ fail_on_drift: true }, context)
+    this._trackWorkspaceWrite('sync_workspace_changes', result)
+
+    if (result.success) {
+      logger.info(
+        {
+          sessionId: this.sessionId,
+          changeCount: result.data?.changeCount || 0,
+        },
+        'Auto-synced dirty workspace changes'
+      )
+    } else {
+      logger.warn(
+        {
+          sessionId: this.sessionId,
+          error: result.error || result.output,
+        },
+        'Auto-syncing dirty workspace changes failed'
+      )
+    }
+
+    yield {
+      type: 'tool_result',
+      toolCallId,
+      toolName: 'sync_workspace_changes',
+      result,
+    }
+  }
+
   /**
    * Apply a confirmed change to the document/project.
    * Handles edit, create, and delete change types.
@@ -1426,6 +1561,7 @@ export class AgentLoop {
       userId: this.userId,
       sessionState,
       adapters: this.adapters,
+      persistentWorkspace: sessionState.persistentWorkspace,
     }
 
     // Phase 1: Deduplicate by path — one full read per unique file.
@@ -1512,18 +1648,18 @@ export class AgentLoop {
    * Uses a session-level promptSnapshot to ensure prefix stability across LLM requests.
    * Non-critical: failures are logged and silently ignored.
    */
-  async _enrichContext(context) {
+  async _enrichContext(context, sessionState = {}) {
     const enriched = { ...context }
     const rootDocId = context.rootDocId
 
-    if (!rootDocId || !this.adapters) return enriched
-
     try {
       // Check for existing promptSnapshot (frozen at session start)
-      const session = await db.aiSessions.findOne(
-        { _id: new ObjectId(this.sessionId) },
-        { projection: { promptSnapshot: 1 } }
-      )
+      const session = this.disablePersistence
+        ? null
+        : await db.aiSessions.findOne(
+          { _id: new ObjectId(this.sessionId) },
+          { projection: { promptSnapshot: 1 } }
+        )
 
       if (session?.promptSnapshot) {
         // Use snapshot — skip live parsing to preserve prefix stability
@@ -1532,62 +1668,58 @@ export class AgentLoop {
         if (snap.rootDocPath) enriched.rootDocPath = snap.rootDocPath
         if (snap.documentOutline) enriched.documentOutline = snap.documentOutline
         if (snap.fileReferences) enriched.fileReferences = snap.fileReferences
-        if (snap.projectRules) enriched.projectRules = snap.projectRules
+        if (snap.agentContextBlock) enriched.agentContextBlock = snap.agentContextBlock
         return enriched
       }
 
-      // No snapshot (first request) — resolve live and persist
-      const rootDocPath = await this.adapters.project.resolveDocIdToPath(
-        this.projectId,
-        rootDocId
-      )
-      if (rootDocPath) {
-        enriched.rootDocPath = rootDocPath
-      }
+      let shouldPersistSnapshot = false
 
-      // Get document content
-      const { content } = await this.adapters.document.getDocumentContent(
-        this.projectId,
-        rootDocId
-      )
+      if (rootDocId && this.adapters?.project && this.adapters?.document) {
+        shouldPersistSnapshot = true
+        const rootDocPath = await this.adapters.project.resolveDocIdToPath(
+          this.projectId,
+          rootDocId
+        )
+        if (rootDocPath) {
+          enriched.rootDocPath = rootDocPath
+        }
 
-      // Extract outline (primary) or file references (fallback)
-      const outline = extractOutline(content)
-      if (outline) {
-        enriched.documentOutline = outline
-      } else {
-        const refs = extractFileReferences(content)
-        if (refs) {
-          enriched.fileReferences = refs
+        const { content } = await this.adapters.document.getDocumentContent(
+          this.projectId,
+          rootDocId
+        )
+
+        const outline = extractOutline(content)
+        if (outline) {
+          enriched.documentOutline = outline
+        } else {
+          const refs = extractFileReferences(content)
+          if (refs) {
+            enriched.fileReferences = refs
+          }
         }
       }
 
-      // Fetch project rules from MemoryManager
-      try {
-        const memoryManager = getMemoryManager()
-        if (memoryManager) {
-          const rules = await memoryManager.getMemoryContent(this.projectId)
-          if (rules) enriched.projectRules = rules
-        }
-      } catch (err) {
-        logger.warn({ err, projectId: this.projectId }, 'Failed to fetch project rules')
-      }
+      await this._applyAgentContext(enriched, sessionState)
+      shouldPersistSnapshot = shouldPersistSnapshot || !!enriched.agentContextBlock
 
       // Persist snapshot for subsequent requests in this session
-      await db.aiSessions.updateOne(
-        { _id: new ObjectId(this.sessionId) },
-        {
-          $set: {
-            promptSnapshot: {
-              projectName: enriched.projectName || null,
-              rootDocPath: enriched.rootDocPath || null,
-              documentOutline: enriched.documentOutline || null,
-              fileReferences: enriched.fileReferences || null,
-              projectRules: enriched.projectRules || null,
+      if (!this.disablePersistence && shouldPersistSnapshot) {
+        await db.aiSessions.updateOne(
+          { _id: new ObjectId(this.sessionId) },
+          {
+            $set: {
+              promptSnapshot: {
+                projectName: enriched.projectName || null,
+                rootDocPath: enriched.rootDocPath || null,
+                documentOutline: enriched.documentOutline || null,
+                fileReferences: enriched.fileReferences || null,
+                agentContextBlock: enriched.agentContextBlock || null,
+              },
             },
-          },
-        }
-      )
+          }
+        )
+      }
     } catch (error) {
       logger.warn(
         { err: error, projectId: this.projectId },
@@ -1596,6 +1728,30 @@ export class AgentLoop {
     }
 
     return enriched
+  }
+
+  async _applyAgentContext(enriched, sessionState = {}) {
+    if (this.disablePersistence || !this.userId) return
+    const agentContext = getAgentRuntimeConfig().agentContext || {}
+    if (!agentContext.enabled) return
+    const result = await this.agentContextBuilder.build({
+      sessionId: this.sessionId,
+      projectId: this.projectId,
+      userId: this.userId,
+      turnId: sessionState.turnId || enriched._turnId,
+      rootDocId: enriched.rootDocId || null,
+      currentDocId: this.currentDocId || enriched.currentDocId || null,
+      currentDocPath: this.currentDocPath || enriched.currentDocPath || null,
+      recallEnabled: agentContext.recallEnabled,
+      maxMemoriesPerTurn: agentContext.maxMemoriesPerTurn,
+      maxRecallChars: agentContext.maxRecallChars,
+    })
+    if (result.block) {
+      enriched.agentContextBlock = result.block
+      enriched._agentContextSnapshotId = result.snapshot?._id?.toString?.() ||
+        result.snapshot?._id ||
+        null
+    }
   }
 
 }

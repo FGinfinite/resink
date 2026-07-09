@@ -72,9 +72,6 @@ module.exports = {
     realTime: {
       url: 'http://127.0.0.1:23026',
     },
-    contacts: {
-      url: 'http://127.0.0.1:23036',
-    },
     notifications: {
       url: 'http://127.0.0.1:23042',
     },
@@ -296,6 +293,13 @@ module.exports = {
 
   devToolbar: {
     enabled: false,
+  },
+
+  projectInviteEncryptorOptions: {
+    cipherLabel: '2026.3-v3',
+    cipherPasswords: {
+      '2026.3-v3': 'this-is-a-weak-secret-for-tests-web-2026.3-v3',
+    },
   },
 }
 

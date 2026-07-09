@@ -17,6 +17,7 @@ export type ExposedSettings = {
   hasLinkUrlFeature: boolean
   hasLinkedProjectFileFeature: boolean
   hasLinkedProjectOutputFileFeature: boolean
+  mixpanelLabsToken?: string
   hasSamlBeta?: boolean
   hasSamlFeature: boolean
   hotjarId?: string

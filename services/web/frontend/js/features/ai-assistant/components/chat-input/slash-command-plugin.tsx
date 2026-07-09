@@ -33,14 +33,14 @@ import {
 class CommandOption extends MenuOption {
   name: string
   label: string
-  icon: string
+  iconType: string
   description?: string
 
   constructor(skill: SkillDefinition) {
     super(skill.name)
     this.name = skill.name
     this.label = skill.label
-    this.icon = skill.icon
+    this.iconType = skill.icon
     this.description = skill.description
   }
 }
@@ -171,6 +171,7 @@ export default function SlashCommandPlugin(): React.JSX.Element | null {
           <div
             className={`ai-typeahead-popover${!editorFocused ? ' ai-typeahead-popover--hidden' : ''}`}
             onMouseDown={e => e.preventDefault()}
+            role="presentation"
           >
             <div className="ai-typeahead-list">
               {menuOptions.map((option, index) => (
@@ -195,7 +196,7 @@ export default function SlashCommandPlugin(): React.JSX.Element | null {
                   onMouseEnter={() => setHighlightedIndex(index)}
                 >
                   <span className="ai-typeahead-icon">
-                    <MaterialIcon type={option.icon} />
+                    <MaterialIcon type={option.iconType} />
                   </span>
                   <span className="ai-typeahead-body">
                     <span className="ai-typeahead-row">
